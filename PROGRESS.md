@@ -43,7 +43,7 @@ Success: no issues found in 3 source files
 
 ## PHASE 1 — The magic moment: YouTube → markdown (captions path)
 
-- [ ] `hearsay <youtube-url>`: fetch metadata via `yt-dlp --dump-json` (title, channel, duration, chapters) — no media download
+- [x] `hearsay <youtube-url>`: fetch metadata via `yt-dlp --dump-json` (title, channel, duration, chapters) — no media download — verified: 22 tests pass offline; live fetch returns correct title/channel/duration/chapters
 - [ ] Fetch captions via youtube-transcript-api (prefer manual subs over auto-generated; `--lang` flag, default `en` with fallback to first available)
 - [ ] Implement the paragraph-grouping algorithm (pause threshold + sentence boundaries + 40–120 word targets) as a pure, heavily-tested function
 - [ ] Chapter-aware sectioning: chapters → `##` headings; no chapters → time-based sections every ~5 minutes
