@@ -172,10 +172,10 @@ on the 19s "Me at the zoo" yields a clean paragraph, method `whisper-tiny`.)
 
 ## PHASE 3 — Scale: podcasts, playlists, JSON
 
-- [ ] Podcast RSS: `hearsay <feed-url>` lists episodes (rich table); `--latest`, `--episode N`, `--all --limit N`
-- [ ] YouTube playlists: same flags; batch mode writes to `--output-dir` (default `./hearsay-out/`), continues past per-item failures, prints a summary table
-- [ ] `--json` sidecar implementing the `Transcript` pydantic model; export the JSON schema to `docs/schema.json`
-- [ ] Tests: feed parsing fixture, batch-failure handling, JSON schema validation
+- [x] Podcast RSS: `hearsay <feed-url>` lists episodes (rich table); `--latest`, `--episode N`, `--all --limit N` — verified: live listing table on Merriam-Webster WOTD; live `--all --limit 3` ingested 3 episodes
+- [x] YouTube playlists: same flags; batch mode writes to `--output-dir` (default `./hearsay-out/`), continues past per-item failures, prints a summary table — verified: playlist fixture parsed; batch-failure test confirms one failure doesn't abort; summary table prints
+- [x] `--json` sidecar implementing the `Transcript` pydantic model; export the JSON schema to `docs/schema.json` — verified: live `--json` writes a valid sidecar (37 chunks); `docs/schema.json` committed and a test asserts it stays in sync
+- [x] Tests: feed parsing fixture, batch-failure handling, JSON schema validation — verified: 141 tests pass offline (test_feeds, test_batch, test_transcript, playlist parsing)
 
 **Acceptance:** one command ingests 3 podcast episodes into a folder with markdown+json · tests pass.
 

@@ -14,3 +14,11 @@ consumes (the dropped keys are multi-hundred-KB format/thumbnail/caption-URL
 blobs irrelevant to tests). `*.transcript.json` is the youtube-transcript-api
 fetch result (`to_raw_data()` snippets) plus the list of available transcripts
 for caption-selection tests.
+
+Other fixtures:
+
+| File | What | Used by |
+| --- | --- | --- |
+| `sample.wav` + `sample.txt` | 4.7s OS-TTS speech clip (macOS `say` + ffmpeg) and its expected text | whisper transcription tests |
+| `podcast.xml` | Real RSS feed (Talk Python To Me), trimmed to the first 3 `<item>`s | `parse_feed` tests |
+| `playlist.json` | Real `yt-dlp -J --flat-playlist` output (Pittsburgh ML Summit '19), trimmed to 4 entries and the fields hearsay uses | `parse_playlist_json` tests |

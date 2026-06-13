@@ -12,9 +12,10 @@ import hearsay.cli as cli
 from hearsay.captions import CaptionResult, normalize_snippets
 from hearsay.cli import app
 from hearsay.errors import NoCaptionsError
-from hearsay.models import Document, Paragraph, Section, SourceMetadata
+from hearsay.feeds import Episode, Feed
+from hearsay.models import Document, Paragraph, Section, SourceMetadata, Transcript
 from hearsay.pipeline import build_document
-from hearsay.youtube import parse_metadata
+from hearsay.youtube import PlaylistEntry, parse_metadata
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -82,11 +83,19 @@ def test_ingest_respects_output_flag(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert dest.exists()
 
 
-def test_ingest_rejects_non_youtube_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_feed_url_is_friendly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A non-YouTube http URL is tried as a podcast feed; a non-feed fails cleanly.
+    from hearsay.errors import FeedError
+
+    def not_a_feed(url: str):
+        raise FeedError(f"No podcast episodes found at {url}.", hint="Point me at an RSS feed.")
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "fetch_feed", not_a_feed)
     result = runner.invoke(app, ["https://example.com/not-a-video"])
     assert result.exit_code == 1
-    assert "YouTube video URLs" in result.output
+    assert "Traceback" not in result.output
+    assert "RSS" in result.output or "feed" in result.output.lower()
     assert not list(tmp_path.glob("*.md"))
 
 
@@ -239,3 +248,108 @@ def test_existing_file_wins_over_youtube_substring_in_path(
     assert result.exit_code == 0, result.output
     assert routed["file"] is True
     assert routed["youtube"] is False
+
+
+# --- JSON sidecar ---------------------------------------------------------
+
+
+def test_json_sidecar_written_and_valid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    md = tmp_path / "out.md"
+    result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "--json", "-o", str(md)])
+    assert result.exit_code == 0, result.output
+    sidecar = tmp_path / "out.json"
+    assert md.exists() and sidecar.exists()
+    transcript = Transcript.model_validate_json(sidecar.read_text())
+    assert transcript.title == "You Would Be a Terrible Leader"
+    assert transcript.chunks
+    assert transcript.chunks[0].section  # every chunk is tagged with its section
+
+
+# --- Batch: playlists and feeds -------------------------------------------
+
+
+def _entries(n: int) -> list[PlaylistEntry]:
+    return [
+        PlaylistEntry(
+            video_id=f"vid{i:08d}xyz"[:11], title=f"Video {i}", url=f"https://youtu.be/v{i}"
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+def test_playlist_no_selection_lists_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "fetch_playlist", lambda url: ("My Playlist", _entries(3)))
+    result = runner.invoke(app, ["https://www.youtube.com/playlist?list=PLabc"])
+    assert result.exit_code == 0, result.output
+    assert "My Playlist" in result.output
+    assert "Video 1" in result.output and "Video 3" in result.output
+
+
+def test_playlist_latest_ingests_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "fetch_playlist", lambda url: ("PL", _entries(3)))
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app, ["https://www.youtube.com/playlist?list=PLabc", "--latest", "--output-dir", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(list(out.glob("*.md"))) == 1
+
+
+def test_playlist_batch_continues_past_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "fetch_playlist", lambda url: ("PL", _entries(3)))
+
+    def flaky(url, **kwargs):  # second video fails; others succeed
+        if url == "https://youtu.be/v2":
+            from hearsay.errors import VideoUnavailableError
+
+            raise VideoUnavailableError("v2 is private", hint="...")
+        return _fixture_document("rStL7niR7gs")
+
+    monkeypatch.setattr(cli, "ingest_youtube", flaky)
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app, ["https://www.youtube.com/playlist?list=PLabc", "--all", "--output-dir", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(list(out.glob("*.md"))) == 2  # two succeeded, one failed but did not abort
+    assert "1 failed" in result.output or "private" in result.output
+
+
+def _feed(n: int) -> Feed:
+    episodes = [
+        Episode(
+            title=f"Episode {i}", audio_url=f"http://x/{i}.mp3", duration_s=60.0 * i, guid=f"g{i}"
+        )
+        for i in range(1, n + 1)
+    ]
+    return Feed(title="My Show", episodes=episodes)
+
+
+def test_feed_no_selection_lists_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "fetch_feed", lambda url: _feed(2))
+    result = runner.invoke(app, ["https://example.com/feed.xml"])
+    assert result.exit_code == 0, result.output
+    assert "My Show" in result.output
+    assert "Episode 1" in result.output
+
+
+def test_feed_episode_n_ingests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "fetch_feed", lambda url: _feed(3))
+    captured: dict[str, object] = {}
+
+    def fake_ingest_episode(episode, show, **kwargs):
+        captured["title"] = episode.title
+        return _whisper_doc(episode.title)
+
+    monkeypatch.setattr(cli, "ingest_episode", fake_ingest_episode)
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app, ["https://example.com/feed.xml", "--episode", "2", "--output-dir", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["title"] == "Episode 2"
+    assert len(list(out.glob("*.md"))) == 1

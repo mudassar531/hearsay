@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hearsay.captions import CaptionResult, fetch_captions
-from hearsay.errors import InvalidSourceError, NoCaptionsError
+from hearsay.errors import AudioDownloadError, InvalidSourceError, NoCaptionsError
+from hearsay.feeds import Episode, download_episode
 from hearsay.grouping import group_segments
 from hearsay.models import Document, Segment, SourceMetadata
 from hearsay.sectioning import sectionize
@@ -21,6 +22,7 @@ from hearsay.youtube import download_audio, fetch_raw_metadata, parse_metadata
 MetadataFetcher = Callable[[str], dict]
 CaptionFetcher = Callable[[str, str], CaptionResult]
 AudioDownloader = Callable[[str, Path], Path]
+EpisodeDownloader = Callable[[str, Path], Path]
 Transcriber = Callable[..., TranscriptionResult]
 
 _AUDIO_EXTENSIONS = {
@@ -163,10 +165,53 @@ def ingest_file(
     )
 
 
+def ingest_episode(
+    episode: Episode,
+    show_title: str,
+    *,
+    model_size: str = DEFAULT_MODEL,
+    language: str | None = None,
+    episode_downloader: EpisodeDownloader = download_episode,
+    transcriber: Transcriber = transcribe_audio,
+    on_progress: Callable[[float, float], None] | None = None,
+    now: Callable[[], str] = _utc_now_iso,
+) -> Document:
+    """Ingest one podcast episode: download its audio and transcribe it.
+
+    The downloaded audio is always deleted. Raises AudioDownloadError when the
+    episode has no usable media URL.
+    """
+    if not episode.audio_url:
+        raise AudioDownloadError(
+            f"Episode '{episode.title}' has no audio enclosure.",
+            hint="This feed entry has no downloadable media; try another episode.",
+        )
+    with tempfile.TemporaryDirectory(prefix="hearsay-") as tmp:
+        audio_path = episode_downloader(episode.audio_url, Path(tmp))
+        result = transcriber(
+            audio_path, model_size=model_size, language=language, on_progress=on_progress
+        )
+    meta = SourceMetadata(
+        title=episode.title,
+        source=episode.audio_url,
+        channel=show_title,
+        duration_s=episode.duration_s or result.duration_s,
+        video_id=episode.title,
+    )
+    return assemble_document(
+        meta,
+        result.segments,
+        method=f"whisper-{result.model_size}",
+        language=result.language,
+        ingested_at=now(),
+    )
+
+
 __all__ = [
     "NoCaptionsError",
     "assemble_document",
     "build_document",
+    "ingest_episode",
     "ingest_file",
     "ingest_youtube",
     "ingest_youtube_transcribe",

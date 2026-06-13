@@ -1,9 +1,10 @@
 """Command-line interface for hearsay.
 
-A single Typer command: ``hearsay <SOURCE> [--output] [--lang] [--transcribe]
-[--model]``. SOURCE is a YouTube URL or a local audio/video file. A single
-command keeps option order natural; the ``mcp`` subcommand planned for Phase 4
-will convert this into a group.
+A single Typer command. SOURCE may be a YouTube video URL, a YouTube playlist
+URL, a podcast RSS feed, or a local audio/video file. Single sources write one
+markdown file; batch sources (playlists/feeds) list their items, or ingest a
+selection into an output directory. A single command keeps option order natural;
+the ``mcp`` subcommand planned for Phase 4 will convert this into a group.
 """
 
 from collections.abc import Iterator
@@ -16,19 +17,29 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
+from rich.table import Table
 
 from hearsay import __version__
-from hearsay.errors import HearsayError, InvalidSourceError, OutputWriteError
-from hearsay.models import Document
+from hearsay.batch import BatchItem, run_batch, select, slugify
+from hearsay.errors import HearsayError, OutputWriteError
+from hearsay.feeds import Episode, fetch_feed
+from hearsay.models import Document, Transcript
 from hearsay.pipeline import (
     NoCaptionsError,
+    ingest_episode,
     ingest_file,
     ingest_youtube,
     ingest_youtube_transcribe,
 )
 from hearsay.render import render_markdown
+from hearsay.timefmt import format_timestamp
 from hearsay.transcribe import DEFAULT_MODEL
-from hearsay.youtube import extract_video_id
+from hearsay.youtube import (
+    PlaylistEntry,
+    extract_playlist_id,
+    extract_video_id,
+    fetch_playlist,
+)
 
 PITCH = (
     "crawl4ai for video & audio — turn any YouTube video, podcast episode, "
@@ -46,8 +57,8 @@ class ModelSize(StrEnum):
     large_v3 = "large-v3"
 
 
-# Module-level singleton so it is not constructed in an argument default (B008).
 _DEFAULT_MODEL = ModelSize(DEFAULT_MODEL)
+_DEFAULT_OUTPUT_DIR = Path("./hearsay-out")
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 console = Console()
@@ -66,7 +77,7 @@ def main(
         str,
         typer.Argument(
             metavar="SOURCE",
-            help="A YouTube video URL or a local audio/video file.",
+            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
             show_default=False,
         ),
     ],
@@ -75,10 +86,14 @@ def main(
         typer.Option(
             "-o",
             "--output",
-            help="Write markdown here. Defaults to ./<video-id>.md",
+            help="Output file for a single source. Default ./<id>.md",
             show_default=False,
         ),
     ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Output directory for batch (playlist/feed) ingestion."),
+    ] = _DEFAULT_OUTPUT_DIR,
     language: Annotated[
         str | None,
         typer.Option(
@@ -90,83 +105,89 @@ def main(
     transcribe: Annotated[
         bool,
         typer.Option(
-            "--transcribe",
-            help="Force local whisper transcription even when captions exist.",
+            "--transcribe", help="Force local whisper transcription even when captions exist."
         ),
     ] = False,
     model: Annotated[
         ModelSize,
         typer.Option("--model", help="Whisper model size for transcription."),
     ] = _DEFAULT_MODEL,
+    write_json: Annotated[
+        bool,
+        typer.Option("--json", help="Also write a .json sidecar matching the Transcript schema."),
+    ] = False,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest", help="Batch: ingest only the most recent item."),
+    ] = False,
+    episode: Annotated[
+        int | None,
+        typer.Option(
+            "--episode", help="Batch: ingest only item number N (1-indexed).", show_default=False
+        ),
+    ] = None,
+    all_: Annotated[
+        bool,
+        typer.Option("--all", help="Batch: ingest every item (cap with --limit)."),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit", help="Batch: cap the number ingested with --all.", show_default=False
+        ),
+    ] = None,
     version: Annotated[
         bool,
         typer.Option(
-            "--version",
-            callback=_show_version,
-            is_eager=True,
-            help="Show the version and exit.",
+            "--version", callback=_show_version, is_eager=True, help="Show the version and exit."
         ),
     ] = False,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
     try:
-        document, default_name = _produce_document(
-            source, language=language, transcribe=transcribe, model=model.value
-        )
-        destination = output if output is not None else Path(f"./{default_name}.md")
-        _write_output(destination, render_markdown(document))
+        path = Path(source).expanduser()
+        if path.is_file():
+            _run_single(_ingest_file(path, language, model.value), path.stem, output, write_json)
+        elif extract_playlist_id(source) is not None:
+            _run_playlist(source, locals())
+        elif extract_video_id(source) is not None:
+            document = _ingest_youtube_source(source, language, transcribe, model.value)
+            _run_single(document, extract_video_id(source) or "video", output, write_json)
+        elif source.startswith(("http://", "https://")):
+            _run_feed(source, locals())
+        else:
+            _run_single(_ingest_file(path, language, model.value), path.stem, output, write_json)
     except KeyboardInterrupt:
-        err_console.print("\n[yellow]Interrupted.[/yellow] No file was written.")
+        err_console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130) from None
     except HearsayError as exc:
         _print_error(exc)
         raise typer.Exit(code=1) from exc
 
-    _print_success(document, destination)
+
+# --- Single-source ingestion ---------------------------------------------
 
 
-def _produce_document(
-    source: str, *, language: str | None, transcribe: bool, model: str
-) -> tuple[Document, str]:
-    """Route SOURCE to the right ingestion path and return (document, name).
-
-    An existing local file wins over URL matching, so a path that merely
-    contains a YouTube host substring (e.g. a ``youtu.be/`` folder) is still
-    transcribed rather than handed to yt-dlp.
-    """
-    path = Path(source).expanduser()
-    if path.is_file():
-        return _ingest_file(path, language, model), path.stem
-
-    video_id = extract_video_id(source)
-    if video_id is not None:
-        return _ingest_youtube_source(source, video_id, language, transcribe, model), video_id
-
-    if source.startswith(("http://", "https://")):
-        raise InvalidSourceError(
-            f"hearsay does not know how to ingest this URL yet: {source}",
-            hint=(
-                "Right now hearsay accepts YouTube video URLs and local files. "
-                "Podcast feeds and playlists arrive in Phase 3."
-            ),
-        )
-
-    # Not a URL and not an existing file: let ingest_file raise a clear error.
-    return _ingest_file(path, language, model), path.stem
+def _run_single(
+    document: Document, default_name: str, output: Path | None, write_json: bool
+) -> None:
+    destination = output if output is not None else Path(f"./{default_name}.md")
+    written = _write_document(document, destination, write_json=write_json)
+    _print_success(document, written)
 
 
 def _ingest_file(path: Path, language: str | None, model: str) -> Document:
-    """Transcribe a local file, with a progress bar."""
-    with _transcription_progress(f"Transcribing {path.name} with whisper '{model}'") as cb:
+    with _progress(f"Transcribing {path.name} with whisper '{model}'") as cb:
         return ingest_file(path, model_size=model, language=language, on_progress=cb)
 
 
 def _ingest_youtube_source(
-    url: str, video_id: str, language: str | None, transcribe: bool, model: str
+    url: str, language: str | None, transcribe: bool, model: str
 ) -> Document:
     """Captions path, or whisper — forced by --transcribe or auto on no captions."""
     if transcribe:
         return _transcribe_youtube(url, model, language, forced=True)
+    video_id = extract_video_id(url) or url
     try:
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
             return ingest_youtube(url, language=language or "en")
@@ -175,21 +196,138 @@ def _ingest_youtube_source(
         return _transcribe_youtube(url, model, language, forced=False)
 
 
-def _transcribe_youtube(url: str, model: str, lang: str | None, *, forced: bool) -> Document:
-    """Download a YouTube video's audio and transcribe it locally."""
+def _transcribe_youtube(url: str, model: str, language: str | None, *, forced: bool) -> Document:
     why = "Transcribing" if forced else "Downloading audio, then transcribing"
     console.print(f"[dim]{why} locally with whisper '{model}'. This can take a few minutes.[/dim]")
-    with _transcription_progress("Transcribing audio") as cb:
-        return ingest_youtube_transcribe(url, model_size=model, language=lang, on_progress=cb)
+    with _progress("Transcribing audio") as cb:
+        return ingest_youtube_transcribe(url, model_size=model, language=language, on_progress=cb)
+
+
+# --- Batch ingestion (playlists & feeds) ----------------------------------
+
+
+def _run_playlist(url: str, opts: dict) -> None:
+    with console.status("[bold]Listing playlist…", spinner="dots"):
+        title, entries = fetch_playlist(url)
+    items = [
+        BatchItem(
+            title=e.title,
+            slug=e.video_id,
+            ingest=_youtube_entry_ingester(
+                e, opts["language"], opts["transcribe"], opts["model"].value
+            ),
+        )
+        for e in entries
+    ]
+    _run_batch_or_list(items, title, "video", opts, has_duration=False, entries=entries)
+
+
+def _run_feed(url: str, opts: dict) -> None:
+    with console.status("[bold]Fetching feed…", spinner="dots"):
+        feed = fetch_feed(url)
+    items = [
+        BatchItem(
+            title=ep.title,
+            slug=slugify(ep.title, fallback=f"episode-{i}"),
+            ingest=_episode_ingester(ep, feed.title, opts["language"], opts["model"].value),
+        )
+        for i, ep in enumerate(feed.episodes, start=1)
+    ]
+    _run_batch_or_list(
+        items, feed.title, "episode", opts, has_duration=True, episodes=feed.episodes
+    )
+
+
+def _youtube_entry_ingester(
+    entry: PlaylistEntry, language: str | None, transcribe: bool, model: str
+):
+    def _ingest() -> Document:
+        if transcribe:
+            return ingest_youtube_transcribe(entry.url, model_size=model, language=language)
+        try:
+            return ingest_youtube(entry.url, language=language or "en")
+        except NoCaptionsError:
+            return ingest_youtube_transcribe(entry.url, model_size=model, language=language)
+
+    return _ingest
+
+
+def _episode_ingester(episode: Episode, show: str, language: str | None, model: str):
+    def _ingest() -> Document:
+        return ingest_episode(episode, show, model_size=model, language=language)
+
+    return _ingest
+
+
+def _run_batch_or_list(
+    items: list[BatchItem],
+    source_title: str,
+    noun: str,
+    opts: dict,
+    *,
+    has_duration: bool,
+    entries: list[PlaylistEntry] | None = None,
+    episodes: list[Episode] | None = None,
+) -> None:
+    selected = select(
+        items,
+        latest=opts["latest"],
+        episode=opts["episode"],
+        all_=opts["all_"],
+        limit=opts["limit"],
+    )
+    if not selected:
+        _print_listing(items, source_title, noun, episodes=episodes)
+        return
+
+    output_dir: Path = opts["output_dir"]
+    write_json: bool = opts["write_json"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def write(document: Document, slug: str) -> Path:
+        return _write_document(document, output_dir / f"{slug}.md", write_json=write_json)
+
+    def announce(index: int, total: int, item: BatchItem) -> None:
+        console.print(f"[bold blue]\\[{index}/{total}][/bold blue] {item.title}")
+
+    results = run_batch(selected, write, on_item=announce)
+    _print_summary(results, output_dir)
+
+
+# --- Output writing -------------------------------------------------------
+
+
+def _write_document(document: Document, destination: Path, *, write_json: bool) -> Path:
+    """Write the markdown (and optional JSON sidecar); return the markdown path."""
+    _write_text(destination, render_markdown(document))
+    if write_json:
+        sidecar = destination.with_suffix(".json")
+        transcript = Transcript.from_document(document)
+        _write_text(sidecar, transcript.model_dump_json(indent=2) + "\n")
+    return destination
+
+
+def _write_text(destination: Path, text: str) -> None:
+    try:
+        destination.write_text(text, encoding="utf-8")
+    except IsADirectoryError as exc:
+        raise OutputWriteError(
+            f"The output path is a directory, not a file: {destination}",
+            hint="Pass a file path to -o/--output, e.g. -o transcript.md",
+        ) from exc
+    except OSError as exc:
+        raise OutputWriteError(
+            f"Could not write to {destination}: {exc.strerror or exc}",
+            hint="Check that the parent directory exists and is writable, then try again.",
+        ) from exc
+
+
+# --- Presentation ---------------------------------------------------------
 
 
 @contextmanager
-def _transcription_progress(label: str) -> Iterator:
-    """A rich progress bar driven by an (processed_s, total_s) callback.
-
-    Pulses while the model loads / audio downloads (total unknown), then fills
-    as whisper reports processed seconds.
-    """
+def _progress(label: str) -> Iterator:
+    """A rich progress bar driven by an (processed_s, total_s) callback."""
     progress = Progress(
         TextColumn("[bold blue]{task.description}"),
         BarColumn(),
@@ -208,23 +346,53 @@ def _transcription_progress(label: str) -> Iterator:
         yield on_progress
 
 
-def _write_output(destination: Path, markdown: str) -> None:
-    """Write markdown to disk, turning filesystem errors into friendly ones."""
-    try:
-        destination.write_text(markdown, encoding="utf-8")
-    except IsADirectoryError as exc:
-        raise OutputWriteError(
-            f"The output path is a directory, not a file: {destination}",
-            hint="Pass a file path to -o/--output, e.g. -o transcript.md",
-        ) from exc
-    except OSError as exc:
-        raise OutputWriteError(
-            f"Could not write to {destination}: {exc.strerror or exc}",
-            hint=(
-                "Check that the parent directory exists and is writable, "
-                "then try again (hearsay does not create missing folders)."
-            ),
-        ) from exc
+def _print_listing(
+    items: list[BatchItem],
+    source_title: str,
+    noun: str,
+    *,
+    episodes: list[Episode] | None,
+) -> None:
+    table = Table(title=source_title, title_style="bold")
+    table.add_column("#", justify="right", style="cyan", no_wrap=True)
+    table.add_column(noun.capitalize())
+    if episodes is not None:
+        table.add_column("Duration", justify="right", style="dim")
+    for index, item in enumerate(items, start=1):
+        if episodes is not None:
+            dur = (
+                format_timestamp(episodes[index - 1].duration_s)
+                if episodes[index - 1].duration_s
+                else "—"
+            )
+            table.add_row(str(index), item.title, dur)
+        else:
+            table.add_row(str(index), item.title)
+    console.print(table)
+    console.print(
+        f"[dim]{len(items)} {noun}(s). Ingest with "
+        "--latest, --episode N, or --all [--limit N].[/dim]"
+    )
+
+
+def _print_summary(results: list, output_dir: Path) -> None:
+    table = Table(title="hearsay batch", title_style="bold")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Item")
+    table.add_column("Output / error", overflow="fold")
+    ok_count = 0
+    for result in results:
+        if result.ok:
+            ok_count += 1
+            table.add_row("[green]✓[/green]", result.title, str(result.output))
+        else:
+            table.add_row("[red]✗[/red]", result.title, f"[red]{result.error}[/red]")
+    console.print(table)
+    failed = len(results) - ok_count
+    summary = f"[bold]{ok_count} succeeded[/bold]"
+    if failed:
+        summary += f", [red]{failed} failed[/red]"
+    console.print(f"{summary} · → [bold]{output_dir}/[/bold]")
 
 
 def _print_success(document: Document, destination: Path) -> None:
@@ -242,7 +410,6 @@ def _print_success(document: Document, destination: Path) -> None:
 
 
 def _print_error(exc: HearsayError) -> None:
-    """Render a hearsay error as message + actionable hint (no traceback)."""
     body = f"[red]{exc.message}[/red]"
     if exc.hint:
         body += f"\n\n[bold]Try:[/bold] {exc.hint}"

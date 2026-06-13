@@ -11,6 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "faster-whisper>=1.2.1",
+    "feedparser>=6.0.12",
     "pydantic>=2.13.4",
     "typer>=0.26.7",
     "youtube-transcript-api>=1.2.4",
@@ -62,8 +63,8 @@ warn_unused_ignores = true
 # so first-party import typos still fail.
 
 [[tool.mypy.overrides]]
-# faster-whisper ships no type stubs or py.typed marker.
-module = ["faster_whisper.*"]
+# These third-party deps ship no type stubs or py.typed marker.
+module = ["faster_whisper.*", "feedparser.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

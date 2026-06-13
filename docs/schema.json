@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "Chunk": {
+      "description": "One paragraph of the transcript, tagged with its section, for the JSON sidecar.",
+      "properties": {
+        "start_s": {
+          "description": "Start time of the chunk, in seconds.",
+          "minimum": 0,
+          "title": "Start S",
+          "type": "number"
+        },
+        "end_s": {
+          "description": "End time of the chunk, in seconds.",
+          "minimum": 0,
+          "title": "End S",
+          "type": "number"
+        },
+        "section": {
+          "description": "Title of the section (chapter or time span) this chunk is in.",
+          "title": "Section",
+          "type": "string"
+        },
+        "text": {
+          "description": "The paragraph text.",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s",
+        "section",
+        "text"
+      ],
+      "title": "Chunk",
+      "type": "object"
+    }
+  },
+  "description": "The JSON sidecar: source metadata plus the ordered transcript chunks.\n\nThis is the stable, machine-readable contract for RAG pipelines and agents;\nits JSON Schema is exported to docs/schema.json.",
+  "properties": {
+    "title": {
+      "description": "Title of the video / episode / file.",
+      "title": "Title",
+      "type": "string"
+    },
+    "source": {
+      "description": "Original URL or file path.",
+      "title": "Source",
+      "type": "string"
+    },
+    "channel": {
+      "description": "Channel, show, or 'Local file'.",
+      "title": "Channel",
+      "type": "string"
+    },
+    "duration": {
+      "description": "Total duration as HH:MM:SS.",
+      "title": "Duration",
+      "type": "string"
+    },
+    "ingested": {
+      "description": "UTC ingestion time, ISO-8601 with trailing Z.",
+      "title": "Ingested",
+      "type": "string"
+    },
+    "method": {
+      "description": "How the text was obtained: \"captions\", \"captions-auto\", or \"whisper-<model>\".",
+      "title": "Method",
+      "type": "string"
+    },
+    "language": {
+      "description": "BCP-47-ish language code of the transcript.",
+      "title": "Language",
+      "type": "string"
+    },
+    "chunks": {
+      "description": "Ordered transcript paragraphs.",
+      "items": {
+        "$ref": "#/$defs/Chunk"
+      },
+      "title": "Chunks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "title",
+    "source",
+    "channel",
+    "duration",
+    "ingested",
+    "method",
+    "language"
+  ],
+  "title": "Transcript",
+  "type": "object"
+}

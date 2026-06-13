@@ -5,12 +5,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from hearsay.errors import (
     AudioDownloadError,
     HearsayError,
     InvalidSourceError,
     MetadataError,
+    PlaylistError,
     VideoUnavailableError,
 )
 from hearsay.models import Chapter, SourceMetadata
@@ -28,6 +30,17 @@ _METADATA_TIMEOUT_S = 60
 _DOWNLOAD_TIMEOUT_S = 600
 
 
+_PLAYLIST_ID = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
+
+
+class PlaylistEntry(NamedTuple):
+    """One video in a playlist: its id, title, and watch URL."""
+
+    video_id: str
+    title: str
+    url: str
+
+
 def extract_video_id(url: str) -> str | None:
     """Return the 11-character video id from a YouTube URL, or None if it isn't one."""
     for pattern in _URL_PATTERNS:
@@ -35,6 +48,81 @@ def extract_video_id(url: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def extract_playlist_id(url: str) -> str | None:
+    """Return the playlist id from a canonical /playlist?list=... URL, else None.
+
+    A ``watch?v=...&list=...`` URL is treated as a single video (returns None),
+    so pasting a video that happens to be in a playlist ingests just that video.
+    """
+    if "/playlist" not in url:
+        return None
+    match = _PLAYLIST_ID.search(url)
+    return match.group(1) if match else None
+
+
+def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:
+    """List a playlist's entries via `yt-dlp --flat-playlist` (no per-video fetch).
+
+    Returns (playlist_title, entries). Raises PlaylistError on failure.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "yt_dlp",
+                "-J",
+                "--flat-playlist",
+                "--no-warnings",
+                "--",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_METADATA_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise PlaylistError(
+            f"Timed out listing playlist {url} after {_METADATA_TIMEOUT_S}s.",
+            hint="Check your network connection and try again.",
+        ) from None
+    if proc.returncode != 0:
+        mapped = _map_ytdlp_error(url, proc.stderr)
+        raise PlaylistError(mapped.message, hint=mapped.hint) from None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise PlaylistError(
+            f"yt-dlp returned unparseable playlist data for {url}.",
+            hint="Try updating yt-dlp: uv sync --upgrade-package yt-dlp",
+        ) from exc
+    return parse_playlist_json(data, url)
+
+
+def parse_playlist_json(data: dict, url: str) -> tuple[str, list[PlaylistEntry]]:
+    """Extract (playlist_title, entries) from a yt-dlp `-J --flat-playlist` dict (pure)."""
+    entries: list[PlaylistEntry] = []
+    for raw in data.get("entries") or []:
+        if not raw or not raw.get("id"):
+            continue
+        video_id = str(raw["id"])
+        entries.append(
+            PlaylistEntry(
+                video_id=video_id,
+                title=str(raw.get("title") or video_id),
+                url=str(raw.get("url") or f"https://www.youtube.com/watch?v={video_id}"),
+            )
+        )
+    if not entries:
+        raise PlaylistError(
+            f"No videos found in playlist {url}.",
+            hint="Check the playlist is public and not empty.",
+        )
+    return str(data.get("title") or "Playlist"), entries
 
 
 def fetch_raw_metadata(url: str) -> dict:

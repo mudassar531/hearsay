@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from hearsay.youtube import _pick_downloaded_audio, extract_video_id, parse_metadata
+from hearsay.errors import PlaylistError
+from hearsay.youtube import (
+    _pick_downloaded_audio,
+    extract_playlist_id,
+    extract_video_id,
+    parse_metadata,
+    parse_playlist_json,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -101,3 +108,35 @@ def test_pick_downloaded_audio_ignores_sidecars_and_picks_largest(tmp_path: Path
 def test_pick_downloaded_audio_none_when_only_sidecars(tmp_path: Path) -> None:
     (tmp_path / "vid.webp").write_bytes(b"x")
     assert _pick_downloaded_audio(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/playlist?list=PLabc123", "PLabc123"),
+        ("https://youtube.com/playlist?list=PLxyz&foo=1", "PLxyz"),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc", None),  # video, not playlist
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None),
+        ("https://example.com/playlist?list=PLabc", "PLabc"),
+    ],
+)
+def test_extract_playlist_id(url: str, expected: str | None) -> None:
+    assert extract_playlist_id(url) == expected
+
+
+def test_parse_playlist_json_fixture() -> None:
+    data = json.loads((FIXTURES / "playlist.json").read_text())
+    title, entries = parse_playlist_json(data, "https://www.youtube.com/playlist?list=PL")
+    assert title == "Pittsburgh ML Summit ‘19"
+    assert len(entries) == 4
+    first = entries[0]
+    assert first.video_id == "CvTApw9X8aA"
+    assert first.title.startswith("Welcome")
+    assert first.url == "https://www.youtube.com/watch?v=CvTApw9X8aA" or first.url.startswith(
+        "http"
+    )
+
+
+def test_parse_playlist_json_empty_raises() -> None:
+    with pytest.raises(PlaylistError):
+        parse_playlist_json({"title": "Empty", "entries": []}, "url")

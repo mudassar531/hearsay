@@ -44,3 +44,11 @@ class TranscriptionError(HearsayError):
 
 class AudioDownloadError(HearsayError):
     """yt-dlp could not download the audio stream for transcription."""
+
+
+class FeedError(HearsayError):
+    """A podcast RSS feed could not be fetched or parsed."""
+
+
+class PlaylistError(HearsayError):
+    """A YouTube playlist could not be listed."""

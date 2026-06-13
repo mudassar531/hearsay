@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss
+        xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+        xmlns:podcast="https://podcastindex.org/namespace/1.0"
+        xmlns:atom="http://www.w3.org/2005/Atom"
+        xmlns:content="http://purl.org/rss/1.0/modules/content/"
+        version="2.0">
+    <channel>
+        <title>Talk Python To Me</title>
+        <description>Talk Python to Me is a weekly podcast hosted by developer and entrepreneur Michael Kennedy. We dive
+            deep into the popular packages and software developers, data scientists, and incredible hobbyists doing
+            amazing things with Python. If you're new to Python, you'll quickly learn the ins and outs of the community
+            by hearing from the leaders. And if you've been Pythoning for years, you'll learn about your favorite
+            packages and the hot new ones coming out of open source.
+        </description>
+        <link>https://talkpython.fm/</link>
+        <language>en-us</language>
+        <copyright>Copyright 2015-2026</copyright>
+        <lastBuildDate>Thu, 11 Jun 2026 20:16:11 +0000</lastBuildDate>
+        <pubDate>Thu, 11 Jun 2026 20:16:11 +0000</pubDate>
+        <docs>https://talkpython.fm</docs>
+        <webMaster>mikeckennedy@gmail.com (Michael Kennedy)</webMaster>
+        <ttl>60</ttl>
+        <itunes:author>Michael Kennedy</itunes:author>
+        <itunes:subtitle>Python conversations for passionate developers</itunes:subtitle>
+        <itunes:summary>Talk Python to Me is a weekly podcast hosted by developer and entrepreneur Michael Kennedy. We
+            dive deep into the popular packages and software developers, data scientists, and incredible hobbyists doing
+            amazing things with Python. If you're new to Python, you'll quickly learn the ins and outs of the community
+            by hearing from the leaders. And if you've been Pythoning for years, you'll learn about your favorite
+            packages and the hot new ones coming out of open source.
+        </itunes:summary>
+        <itunes:owner>
+            <itunes:name>Michael Kennedy</itunes:name>
+            <itunes:email>mikeckennedy@gmail.com</itunes:email>
+        </itunes:owner>
+        <itunes:explicit>false</itunes:explicit>
+        <itunes:image href="https://cdn-podcast.talkpython.fm/static/img/talk-python-3000.jpg"/>
+        <itunes:category text="Technology"/>
+        <atom:link href="https://talkpython.fm/episodes/rss" rel="self" type="application/rss+xml"/>
+        <itunes:type>episodic</itunes:type>
+        <podcast:locked owner="mikeckennedy@gmail.com">yes</podcast:locked>
+        <podcast:guid>1cda4dc9-ca77-5461-b0f6-11c9335480e1</podcast:guid>
+        <item>
+            <title>#551: Stroll Down Startup Lane - 2026</title>
+            <link>https://talkpython.fm/episodes/show/551/stroll-down-startup-lane-2026</link>
+            <guid isPermaLink="false">9e521725-b3d5-4996-82c0-49c6ea838fcb</guid>
+            <enclosure
+                    url="https://talkpython.fm/episodes/download/551/stroll-down-startup-lane-2026.mp3"
+                    length="104851325"
+                    type="audio/mpeg"/>
+            <category>Technology</category>
+            <pubDate>Thu, 11 Jun 2026 20:16:11 +0000</pubDate>
+            <itunes:author>Michael Kennedy (@mkennedy)</itunes:author>
+            <itunes:title>Stroll Down Startup Lane - 2026</itunes:title>
+            <itunes:episode>551</itunes:episode>
+            <itunes:explicit>false</itunes:explicit>
+            <itunes:subtitle></itunes:subtitle>
+            <itunes:summary><![CDATA[If you've ever been to PyCon, you know one of the best parts of the expo hall is Startup Row, a stretch of booths where early-stage companies built on Python show off what they're creating. But only attendees get to walk that lane, so let's bring it to everyone. In this episode, we stroll down Startup Row together. We kick things off with the organizers, Jason and Shay, who share the program's origin story going back to Paul Graham and the PSF, plus some surprising stats, including two unicorns among the alumni. Then we meet five startups: Tetrix, bringing AI to institutional investing in private markets. Arcjet, security that lives inside your app as an SDK. Phemeral.dev, serverless hosting built for Python web apps. CapiscIO, an identity and authority layer for AI agents. And Pixeltable, a multimodal database from Marcel Kornacker, co-creator of Apache Parquet. See if you can spot the theme running through them all. Let's go for a walk.]]></itunes:summary>
+            <itunes:duration>6534</itunes:duration>
+            <itunes:image href="https://cdn-podcast.talkpython.fm/static/img/talk-python-3000.jpg"/>
+            <itunes:keywords>python, pycharm, python3, python2, software, programming, web, web development, developer,
+                ide, podcast, software developer, training, course, online, online course, data science, nosql, mongodb,
+                cloud computing
+            </itunes:keywords>
+            <description>
+                <![CDATA[If you've ever been to PyCon, you know one of the best parts of the expo hall is Startup Row, a stretch of booths where early-stage companies built on Python show off what they're creating. But only attendees get to walk that lane, so let's bring it to everyone. In this episode, we stroll down Startup Row together. We kick things off with the organizers, Jason and Shay, who share the program's origin story going back to Paul Graham and the PSF, plus some surprising stats, including two unicorns among the alumni. Then we meet five startups: Tetrix, bringing AI to institutional investing in private markets. Arcjet, security that lives inside your app as an SDK. Phemeral.dev, serverless hosting built for Python web apps. CapiscIO, an identity and authority layer for AI agents. And Pixeltable, a multimodal database from Marcel Kornacker, co-creator of Apache Parquet. See if you can spot the theme running through them all. Let's go for a walk.<br/>
+<br/>
+<strong>Episode sponsors</strong><br/>
+<br/>
+<a href='https://talkpython.fm/agentfield-page'>AgentField AI</a><br>
+<a href='https://talkpython.fm/training'>Talk Python Courses</a><br/>
+<br/>
+<h2 class="links-heading mb-4">Links from the show</h2>
+<div><strong>Guests</strong><br/>
+<strong>Naunidh Bhalla</strong>: <a href="https://www.linkedin.com/in/naunidhbhalla?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Grant Gittes</strong>: <a href="https://www.linkedin.com/in/grantgittes/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Marcel Kornacker</strong>: <a href="https://www.linkedin.com/in/marcelkornacker/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Beon de Nood</strong>: <a href="https://www.linkedin.com/in/beondenood/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Chinmaya Joshi</strong>: <a href="https://www.linkedin.com/in/cshjoshi/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>David Mytton</strong>: <a href="https://www.linkedin.com/in/davidmytton/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Shea Tate-Di Donna</strong>: <a href="https://www.linkedin.com/in/sheatatedidonna/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Jason Rowley</strong>: <a href="https://www.linkedin.com/in/jasondrowley/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<strong>Azul Garza</strong>: <a href="https://github.com/AzulGarza?featured_on=talkpython" target="_blank" >github.com</a><br/>
+<strong>Renée Rosillo</strong>: <a href="https://www.linkedin.com/in/reneerosillo/?featured_on=talkpython" target="_blank" >linkedin.com</a><br/>
+<br/>
+<strong>Tetrix</strong>: <a href="https://www.tetrix.co/?featured_on=talkpython" target="_blank" >tetrix.co</a><br/>
+<strong>Tetrix Jobs</strong>: <a href="https://www.tetrix.co/careers?featured_on=talkpython" target="_blank" >tetrix.co</a><br/>
+<strong>Arcjet</strong>: <a href="https://arcjet.com/?featured_on=talkpython" target="_blank" >arcjet.com</a><br/>
+<strong>Pixeltable</strong>: <a href="https://www.pixeltable.com/?featured_on=talkpython" target="_blank" >pixeltable.com</a><br/>
+<strong>Phemeral.dev</strong>: <a href="https://phemeral.dev/?featured_on=talkpython" target="_blank" >phemeral.dev</a><br/>
+<strong>CapiscIO</strong>: <a href="https://capisc.io/?featured_on=talkpython" target="_blank" >capisc.io</a><br/>
+<br/>
+<strong>Episode #551 deep-dive</strong>: <a href="https://talkpython.fm/episodes/show/551/stroll-down-startup-lane-2026#takeaways-anchor" target="_blank" >talkpython.fm/551</a><br/>
+<strong>Episode transcripts</strong>: <a href="https://talkpython.fm/episodes/transcript/551/stroll-down-startup-lane-2026" target="_blank" >talkpython.fm</a><br/>
+<br/>
+<strong>Theme Song: Developer Rap</strong><br/>
+<strong>🥁 Served in a Flask 🎸</strong>: <a href="https://talkpython.fm/flasksong" target="_blank" >talkpython.fm/flasksong</a><br/>
+<br/>
+<strong>---==  Don't be a stranger  ==---</strong><br/>
+<strong>YouTube</strong>: <a href="https://talkpython.fm/youtube" target="_blank" ><i class="fa-brands fa-youtube"></i> youtube.com/@talkpython</a><br/>
+<br/>
+<strong>Bluesky</strong>: <a href="https://bsky.app/profile/talkpython.fm" target="_blank" >@talkpython.fm</a><br/>
+<strong>Mastodon</strong>: <a href="https://fosstodon.org/web/@talkpython" target="_blank" ><i class="fa-brands fa-mastodon"></i> @talkpython@fosstodon.org</a><br/>
+<strong>X.com</strong>: <a href="https://x.com/talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @talkpython</a><br/>
+<br/>
+<strong>Michael on Bluesky</strong>: <a href="https://bsky.app/profile/mkennedy.codes?featured_on=talkpython" target="_blank" >@mkennedy.codes</a><br/>
+<strong>Michael on Mastodon</strong>: <a href="https://fosstodon.org/web/@mkennedy" target="_blank" ><i class="fa-brands fa-mastodon"></i> @mkennedy@fosstodon.org</a><br/>
+<strong>Michael on X.com</strong>: <a href="https://x.com/mkennedy?featured_on=talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @mkennedy</a><br/></div>]]>
+            </description>
+            
+            <podcast:transcript
+                    url="https://talkpython.fm/episodes/show/551/stroll-down-startup-lane-2026.vtt" type="text/vtt"/>
+        </item>
+        <item>
+            <title>#550: AI Contributions and Maintainer Load in Open Source</title>
+            <link>https://talkpython.fm/episodes/show/550/ai-contributions-and-maintainer-load-in-open-source</link>
+            <guid isPermaLink="false">fa2e0132-3c2b-4741-aa1b-f9812bc93d2f</guid>
+            <enclosure
+                    url="https://talkpython.fm/episodes/download/550/ai-contributions-and-maintainer-load-in-open-source.mp3"
+                    length="60409216"
+                    type="audio/mpeg"/>
+            <category>Technology</category>
+            <pubDate>Sat, 30 May 2026 15:43:47 +0000</pubDate>
+            <itunes:author>Michael Kennedy (@mkennedy)</itunes:author>
+            <itunes:title>AI Contributions and Maintainer Load in Open Source</itunes:title>
+            <itunes:episode>550</itunes:episode>
+            <itunes:explicit>false</itunes:explicit>
+            <itunes:subtitle></itunes:subtitle>
+            <itunes:summary><![CDATA[You wake up, brew the coffee, open GitHub, and there it is. Another pull request on your open source project. Thirteen thousand lines added. No issue filed first. No discussion. Just "here, please review this for me." Over the past year, GitHub activity has spiked roughly twelve times in a few short months, and a huge chunk of that signal is landing on the same small group of maintainers who were already stretched thin. The curl bug bounty got buried under AI-generated noise. Jazzband, the home of Django classics like pip-tools and the Django debug toolbar, hit what its maintainer called an "apocalypse" and started sunsetting. Even CPython just shipped fresh guidelines on AI-assisted contributions this week. So what does all of this actually look like from the receiving end of the pull request? On this episode, Paolo Melchiorre joins us to tell that story from inside the maintainer's chair. Paolo is a director of the Django Software Foundation, an organizer of PyCon Italy, a Django Girls coach, and he has spent the past year carefully collecting examples of how AI is reshaping open source contributions. The good, the bad, and the extra fingers. We dig into his PyCon US talk on AI-assisted contributions and maintainer load, why AI is best understood as an amplifier rather than a new kind of contributor, the wildly different policies across 86 open source foundations, whether projects banning AI today are reacting to last year's models.]]></itunes:summary>
+            <itunes:duration>3762</itunes:duration>
+            <itunes:image href="https://cdn-podcast.talkpython.fm/static/img/talk-python-3000.jpg"/>
+            <itunes:keywords>python, pycharm, python3, python2, software, programming, web, web development, developer,
+                ide, podcast, software developer, training, course, online, online course, data science, nosql, mongodb,
+                cloud computing
+            </itunes:keywords>
+            <description>
+                <![CDATA[You wake up, brew the coffee, open GitHub, and there it is. Another pull request on your open source project. Thirteen thousand lines added. No issue filed first. No discussion. Just "here, please review this for me."<br/>
+<br/>
+Over the past year, GitHub activity has spiked roughly twelve times in a few short months, and a huge chunk of that signal is landing on the same small group of maintainers who were already stretched thin. The curl bug bounty got buried under AI-generated noise. Jazzband, the home of Django classics like pip-tools and the Django debug toolbar, hit what its maintainer called an "apocalypse" and started sunsetting. Even CPython just shipped fresh  guidelines on AI-assisted contributions this week.<br/>
+<br/>
+So what does all of this actually look like from the receiving end of the pull request?<br/>
+<br/>
+On this episode, Paolo Melchiorre joins us to tell that story from inside the maintainer's chair. Paolo is a director of the Django Software Foundation, an organizer of PyCon Italy, a Django Girls coach, and he has spent the past year carefully collecting examples of how AI is reshaping open source contributions. The good, the bad, and the extra fingers.<br/>
+<br/>
+We dig into his PyCon US talk on AI-assisted contributions and maintainer load, why AI is best understood as an amplifier rather than a new kind of contributor, the wildly different policies across 86 open source foundations, whether projects banning AI today are reacting to last year's models.<br/>
+<br/>
+<strong>Episode sponsors</strong><br/>
+<br/>
+<a href='https://talkpython.fm/agentfield-page'>AgentField AI</a><br>
+<a href='https://talkpython.fm/training'>Talk Python Courses</a><br/>
+<br/>
+<h2 class="links-heading mb-4">Links from the show</h2>
+<div><strong>Guest</strong><br/>
+<strong>Paolo Melchiorre</strong>: <a href="https://github.com/pauloxnet?featured_on=talkpython" target="_blank" >github.com</a><br/>
+<br/>
+<strong>DSF</strong>: <a href="https://www.djangoproject.com/foundation/?featured_on=talkpython" target="_blank" >www.djangoproject.com</a><br/>
+<strong>djangonaut-space</strong>: <a href="https://djangonaut.space/?featured_on=talkpython" target="_blank" >djangonaut.space</a><br/>
+<strong>PyCon Italia</strong>: <a href="https://2026.pycon.it/en?featured_on=talkpython" target="_blank" >2026.pycon.it</a><br/>
+<strong>uDjango</strong>: <a href="https://github.com/pauloxnet/uDjango?featured_on=talkpython" target="_blank" >github.com</a><br/>
+<strong>My PyCon US 2026 post</strong>: <a href="https://www.paulox.net/2026/05/21/my-pycon-us-2026/?featured_on=talkpython" target="_blank" >www.paulox.net</a><br/>
+<strong>AI-Assisted Contributions and Maintainer Load</strong>: <a href="https://www.paulox.net/2026/05/15/pycon-us-2026/?featured_on=talkpython" target="_blank" >www.paulox.net</a><br/>
+<strong>Senior Engineer Tries Vibe Coding</strong>: <a href="https://www.youtube.com/watch?v=_2C2CNmK7dQ" target="_blank" >www.youtube.com</a><br/>
+<strong>Code Rabbit AI PR Reviews</strong>: <a href="https://www.coderabbit.ai?featured_on=talkpython" target="_blank" >www.coderabbit.ai</a><br/>
+<strong>GitHub Usage Graphs</strong>: <a href="https://github.blog/news-insights/company-news/an-update-on-github-availability/?featured_on=talkpython" target="_blank" >github.blog</a><br/>
+<strong>Update on CPython's AI Policies</strong>: <a href="https://fosstodon.org/@mariatta/116610508567734365" target="_blank" >fosstodon.org</a><br/>
+<strong>High-Quality Chaos from Curl</strong>: <a href="https://daniel.haxx.se/blog/2026/04/22/high-quality-chaos/?featured_on=talkpython" target="_blank" >daniel.haxx.se</a><br/>
+<strong>The Generative AI Policy Landscape in Open Source</strong>: <a href="https://redmonk.com/kholterhoff/2026/02/26/generative-ai-policy-landscape-in-open-source/?featured_on=pythonbytes" target="_blank" >redmonk.com</a><br/>
+<br/>
+<strong>Watch this episode on YouTube</strong>: <a href="https://www.youtube.com/watch?v=1RJ1kkpTdow" target="_blank" >youtube.com</a><br/>
+<strong>Episode #550 deep-dive</strong>: <a href="https://talkpython.fm/episodes/show/550/ai-contributions-and-maintainer-load-in-open-source#takeaways-anchor" target="_blank" >talkpython.fm/550</a><br/>
+<strong>Episode transcripts</strong>: <a href="https://talkpython.fm/episodes/transcript/550/ai-contributions-and-maintainer-load-in-open-source" target="_blank" >talkpython.fm</a><br/>
+<br/>
+<strong>Theme Song: Developer Rap</strong><br/>
+<strong>🥁 Served in a Flask 🎸</strong>: <a href="https://talkpython.fm/flasksong" target="_blank" >talkpython.fm/flasksong</a><br/>
+<br/>
+<strong>---==  Don't be a stranger  ==---</strong><br/>
+<strong>YouTube</strong>: <a href="https://talkpython.fm/youtube" target="_blank" ><i class="fa-brands fa-youtube"></i> youtube.com/@talkpython</a><br/>
+<br/>
+<strong>Bluesky</strong>: <a href="https://bsky.app/profile/talkpython.fm" target="_blank" >@talkpython.fm</a><br/>
+<strong>Mastodon</strong>: <a href="https://fosstodon.org/web/@talkpython" target="_blank" ><i class="fa-brands fa-mastodon"></i> @talkpython@fosstodon.org</a><br/>
+<strong>X.com</strong>: <a href="https://x.com/talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @talkpython</a><br/>
+<br/>
+<strong>Michael on Bluesky</strong>: <a href="https://bsky.app/profile/mkennedy.codes?featured_on=talkpython" target="_blank" >@mkennedy.codes</a><br/>
+<strong>Michael on Mastodon</strong>: <a href="https://fosstodon.org/web/@mkennedy" target="_blank" ><i class="fa-brands fa-mastodon"></i> @mkennedy@fosstodon.org</a><br/>
+<strong>Michael on X.com</strong>: <a href="https://x.com/mkennedy?featured_on=talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @mkennedy</a><br/></div>]]>
+            </description>
+            
+            <podcast:transcript
+                    url="https://talkpython.fm/episodes/show/550/ai-contributions-and-maintainer-load-in-open-source.vtt" type="text/vtt"/>
+        </item>
+        <item>
+            <title>#549: Great Docs</title>
+            <link>https://talkpython.fm/episodes/show/549/great-docs</link>
+            <guid isPermaLink="false">1552cdec-fbb2-4786-ba9d-e80f4ecb2401</guid>
+            <enclosure
+                    url="https://talkpython.fm/episodes/download/549/great-docs.mp3"
+                    length="64548612"
+                    type="audio/mpeg"/>
+            <category>Technology</category>
+            <pubDate>Mon, 25 May 2026 22:11:29 +0000</pubDate>
+            <itunes:author>Michael Kennedy (@mkennedy)</itunes:author>
+            <itunes:title>Great Docs</itunes:title>
+            <itunes:episode>549</itunes:episode>
+            <itunes:explicit>false</itunes:explicit>
+            <itunes:subtitle></itunes:subtitle>
+            <itunes:summary><![CDATA[Your documentation has two audiences now - humans reading the rendered HTML, and AI agents trying to make sense of your library. Rich Iannone and Michael Chow from Posit are back on Talk Python with a brand new Python documentation tool called Great Docs that takes both seriously. Rich is the creator of Great Tables, and before that the R package GT, the man has a serious eye for design, and he's pointed that energy at the Python docs ecosystem. We'll talk about how Great Docs spins up a polished site in three commands, why every page ships as Markdown for your favorite LLM, how it leans on Quarto for executable code blocks and tabbed install sections, and where it lands against Sphinx, MkDocs, and Zensical. Plus, you'll meet Tablin. Here we go.]]></itunes:summary>
+            <itunes:duration>4020</itunes:duration>
+            <itunes:image href="https://cdn-podcast.talkpython.fm/static/img/talk-python-3000.jpg"/>
+            <itunes:keywords>python, pycharm, python3, python2, software, programming, web, web development, developer,
+                ide, podcast, software developer, training, course, online, online course, data science, nosql, mongodb,
+                cloud computing
+            </itunes:keywords>
+            <description>
+                <![CDATA[Your documentation has two audiences now - humans reading the rendered HTML, and AI agents trying to make sense of your library. Rich Iannone and Michael Chow from Posit are back on Talk Python with a brand new Python documentation tool called Great Docs that takes both seriously. Rich is the creator of Great Tables, and before that the R package GT, the man has a serious eye for design, and he's pointed that energy at the Python docs ecosystem. We'll talk about how Great Docs spins up a polished site in three commands, why every page ships as Markdown for your favorite LLM, how it leans on Quarto for executable code blocks and tabbed install sections, and where it lands against Sphinx, MkDocs, and Zensical. Plus, you'll meet Tablin. Here we go.<br/>
+<br/>
+<strong>Episode sponsors</strong><br/>
+<br/>
+<a href='https://talkpython.fm/sentry'>Sentry Error Monitoring, Code talkpython26</a><br>
+<a href='https://talkpython.fm/temporal'>Temporal</a><br>
+<a href='https://talkpython.fm/training'>Talk Python Courses</a><br/>
+<br/>
+<h2 class="links-heading mb-4">Links from the show</h2>
+<div><strong>Guests</strong><br/>
+<strong>Michael Chow</strong>: <a href="https://github.com/machow?featured_on=talkpython" target="_blank" >github.com</a><br/>
+<strong>Rich lannone</strong>: <a href="https://github.com/rich-iannone?featured_on=talkpython" target="_blank" >github.com</a><br/>
+<br/>
+<strong>Python Web Security with OWASP Top 10 and Agentic AI Course</strong>: <a href="https://talkpython.fm/ai-web-security" target="_blank" >talkpython.fm</a><br/>
+<br/>
+<strong>Great Docs</strong>: <a href="https://posit-dev.github.io/great-docs/?featured_on=talkpython" target="_blank" >posit-dev.github.io/great-docs</a><br/>
+<strong>Great Tables</strong>: <a href="https://posit-dev.github.io/great-tables/articles/intro.html?featured_on=talkpython" target="_blank" >posit-dev.github.io</a><br/>
+<strong>GT Episode</strong>: <a href="https://talkpython.fm/episodes/show/492/great-tables" target="_blank" >talkpython.fm</a><br/>
+<strong>Sphinx</strong>: <a href="https://www.sphinx-doc.org/en/master/?featured_on=talkpython" target="_blank" >www.sphinx-doc.org</a><br/>
+<strong>mkdocs</strong>: <a href="https://www.mkdocs.org/?featured_on=talkpython" target="_blank" >www.mkdocs.org</a><br/>
+<strong>Zensical</strong>: <a href="https://zensical.org/?featured_on=talkpython" target="_blank" >zensical.org</a><br/>
+<strong>Hugo</strong>: <a href="https://gohugo.io/?featured_on=talkpython" target="_blank" >gohugo.io</a><br/>
+<strong>Ghost</strong>: <a href="https://ghost.org/?featured_on=talkpython" target="_blank" >ghost.org</a><br/>
+<strong>Rs pkgdown</strong>: <a href="https://pkgdown.r-lib.org/?featured_on=talkpython" target="_blank" >pkgdown.r-lib.org</a><br/>
+<strong>Quarto</strong>: <a href="https://quarto.org/?featured_on=talkpython" target="_blank" >quarto.org</a><br/>
+<strong>quickstart</strong>: <a href="https://posit-dev.github.io/great-docs/user-guide/quickstart.html?featured_on=talkpython" target="_blank" >posit-dev.github.io</a><br/>
+<strong>llms.txt file</strong>: <a href="https://llmstxt.org/?featured_on=talkpython" target="_blank" >llmstxt.org</a><br/>
+<strong>llms.txt</strong>: <a href="https://talkpython.fm/llms.txt" target="_blank" >talkpython.fm</a><br/>
+<strong>mcp</strong>: <a href="https://talkpython.fm/ai-integration" target="_blank" >talkpython.fm</a><br/>
+<strong>cli</strong>: <a href="https://talkpython.fm/blog/posts/talk-python-now-has-a-cli/" target="_blank" >talkpython.fm</a><br/>
+<br/>
+<strong>Watch this episode on YouTube</strong>: <a href="https://www.youtube.com/watch?v=rj2hY2Bsi30" target="_blank" >youtube.com</a><br/>
+<strong>Episode #549 deep-dive</strong>: <a href="https://talkpython.fm/episodes/show/549/great-docs#takeaways-anchor" target="_blank" >talkpython.fm/549</a><br/>
+<strong>Episode transcripts</strong>: <a href="https://talkpython.fm/episodes/transcript/549/great-docs" target="_blank" >talkpython.fm</a><br/>
+<br/>
+<strong>Theme Song: Developer Rap</strong><br/>
+<strong>🥁 Served in a Flask 🎸</strong>: <a href="https://talkpython.fm/flasksong" target="_blank" >talkpython.fm/flasksong</a><br/>
+<br/>
+<strong>---==  Don't be a stranger  ==---</strong><br/>
+<strong>YouTube</strong>: <a href="https://talkpython.fm/youtube" target="_blank" ><i class="fa-brands fa-youtube"></i> youtube.com/@talkpython</a><br/>
+<br/>
+<strong>Bluesky</strong>: <a href="https://bsky.app/profile/talkpython.fm" target="_blank" >@talkpython.fm</a><br/>
+<strong>Mastodon</strong>: <a href="https://fosstodon.org/web/@talkpython" target="_blank" ><i class="fa-brands fa-mastodon"></i> @talkpython@fosstodon.org</a><br/>
+<strong>X.com</strong>: <a href="https://x.com/talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @talkpython</a><br/>
+<br/>
+<strong>Michael on Bluesky</strong>: <a href="https://bsky.app/profile/mkennedy.codes?featured_on=talkpython" target="_blank" >@mkennedy.codes</a><br/>
+<strong>Michael on Mastodon</strong>: <a href="https://fosstodon.org/web/@mkennedy" target="_blank" ><i class="fa-brands fa-mastodon"></i> @mkennedy@fosstodon.org</a><br/>
+<strong>Michael on X.com</strong>: <a href="https://x.com/mkennedy?featured_on=talkpython" target="_blank" ><i class="fa-brands fa-twitter"></i> @mkennedy</a><br/></div>]]>
+            </description>
+            
+            <podcast:transcript
+                    url="https://talkpython.fm/episodes/show/549/great-docs.vtt" type="text/vtt"/>
+        </item>
+</channel>
+</rss>
