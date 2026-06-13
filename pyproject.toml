@@ -6,6 +6,8 @@ readme = "README.md"
 authors = [
     { name = "Mudassar Awan", email = "mudassar.awan@snapdev.ai" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.26.7",
