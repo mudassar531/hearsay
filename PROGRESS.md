@@ -104,7 +104,7 @@ README.md   rStL7niR7gs.md   zjkBMFhNj_g.md
 - [x] `--transcribe` flag to force whisper on YouTube URLs (yt-dlp audio-only download → transcribe); auto-fallback when no captions exist, with a "transcribing locally, this takes a few minutes" notice — verified: live `--transcribe --model tiny` on a 19s video; fallback covered by tests
 - [x] `--model` flag (default `small`); rich progress bar during transcription; clean temp-file handling (always delete downloaded audio) — verified: `--model` enum validated by Typer; temp dir auto-deleted (test + live check); progress bar driven by whisper callback
 - [x] Add a short (<30s) public-domain audio clip to `tests/fixtures/`; integration test transcribes it with `tiny` — verified: 4.7s OS-TTS WAV; `test_transcribe_sample_with_tiny` passes (offline via cached model + local_files_only)
-- [ ] Document ffmpeg as a requirement with install commands per OS in README
+- [x] Document ffmpeg as a requirement with install commands per OS in README — verified: README Requirements section lists per-OS install commands (brew/apt/dnf/pacman/winget/choco)
 
 **Acceptance:** `uv run hearsay tests/fixtures/sample.wav` produces correct markdown · captionless YouTube video works end-to-end via fallback.
 
