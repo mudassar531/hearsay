@@ -271,12 +271,12 @@ Claude Code / Claude Desktop docs.
 
 ## PHASE 5 — Launch kit
 
-- [ ] Real README: hero one-liner, install (`uv tool install` / `pipx`), 30-second quickstart, output example, comparison table, badges
-- [ ] `demo/record.sh` using vhs (or asciinema fallback); output `demo.gif` referenced at the top of README
-- [ ] GitHub Actions CI: ruff + mypy + pytest on 3.11/3.12
-- [ ] `CONTRIBUTING.md` + 3 written-up "good first issue" drafts in `docs/good-first-issues.md`
-- [ ] `uv build` succeeds; dry-run publish checklist in `docs/release.md` (do not actually publish)
-- [ ] `launch/show-hn.md`: a draft Show HN title + 150-word post, and a 4-tweet thread draft
+- [x] Real README: hero one-liner, install (`uv tool install` / `pipx` + from-source), 30-second quickstart, output example, comparison table, badges — verified: renders; both JSON snippets parse; demo gif at top
+- [x] `demo/record.sh` using vhs; output `demo.gif` referenced at the top of README — verified: vhs installed; gif generated (208KB); last-frame inspection shows the command + success panel + markdown output
+- [x] GitHub Actions CI: ruff + mypy + pytest on 3.11/3.12 — verified: pushed; `gh run` conclusion=success on both 3.11 and 3.12
+- [x] `CONTRIBUTING.md` + 3 written-up "good first issue" drafts in `docs/good-first-issues.md` — verified: both files present; 3 scoped issues with files-to-touch + verification
+- [x] `uv build` succeeds; dry-run publish checklist in `docs/release.md` (does not publish) — verified: `uv build` produced wheel + sdist; release.md is a dry-run checklist, no auto-publish
+- [x] `launch/show-hn.md`: Show HN title + 150-word post + 4-tweet thread — verified: present; plain, demo-first tone
 
 **Acceptance:** fresh-clone test — `git clone` → install → ingest a URL works following only the README · CI green · demo gif renders.
 

@@ -29,6 +29,16 @@ pipx install hearsay
 uv tool install "hearsay[mcp]"
 ```
 
+> **Pre-release:** hearsay isn't on PyPI yet. Until the first release, install
+> from a checkout:
+>
+> ```bash
+> git clone https://github.com/mudassar531/hearsay
+> cd hearsay
+> uv tool install .               # puts `hearsay` on your PATH
+> # or, for development:  uv sync && uv run hearsay --help
+> ```
+
 **System requirement:** [ffmpeg](#requirements) on your PATH.
 
 ## 30-second quickstart
