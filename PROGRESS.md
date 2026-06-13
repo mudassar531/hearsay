@@ -5,9 +5,9 @@ Rule: a box is ticked only after its verification command ran and passed. One co
 
 ## STEP ZERO
 
-- [x] Save the prompt verbatim to `SPEC.md`
-- [x] Create `PROGRESS.md` with every phase and task as checkboxes
-- [x] Create `DECISIONS.md` with a header
+- [x] Save the prompt verbatim to `SPEC.md` — verified: file present, committed in 58127c1
+- [x] Create `PROGRESS.md` with every phase and task as checkboxes — verified: this file, committed in 58127c1
+- [x] Create `DECISIONS.md` with a header — verified: file present, committed in 58127c1
 
 ## PHASE 0 — Scaffold (target: everything runs)
 
@@ -18,6 +18,28 @@ Rule: a box is ticked only after its verification command ran and passed. One co
 - [x] MIT `LICENSE`, stub `README.md` (one-liner + "under construction"), `.gitignore`, `git init` + first commit — verified: all files present; .gitignore + git init were done in STEP ZERO (see DECISIONS.md)
 
 **Acceptance:** `uv run hearsay --version` prints version · `uv run pytest` passes · `uv run ruff check .` clean.
+
+### Phase 0 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15). An independent 3-agent gate
+review re-ran acceptance, audited spec compliance, and code-reviewed the scaffold;
+its accepted findings (scoped mypy leniency, hardened smoke tests) were fixed before
+this evidence run.
+
+```text
+$ uv run hearsay --version
+hearsay 0.1.0
+
+$ uv run pytest
+....                                                                     [100%]
+4 passed in 0.05s
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy
+Success: no issues found in 3 source files
+```
 
 ## PHASE 1 — The magic moment: YouTube → markdown (captions path)
 
