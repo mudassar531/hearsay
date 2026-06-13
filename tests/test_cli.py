@@ -216,6 +216,25 @@ def test_transcribe_flag_forces_whisper_on_youtube(
     assert called["captions"] is False  # --transcribe skips captions entirely
 
 
+def test_no_vad_flag_threads_to_transcription(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_transcribe(*a, **k):
+        captured["vad_filter"] = k.get("vad_filter")
+        return _whisper_doc("song")
+
+    monkeypatch.setattr(cli, "ingest_youtube_transcribe", fake_transcribe)
+    url = "https://youtu.be/rStL7niR7gs"
+    # default → VAD on
+    runner.invoke(app, [url, "--transcribe", "-o", str(tmp_path / "a.md")])
+    assert captured["vad_filter"] is True
+    # --no-vad → VAD off
+    runner.invoke(app, [url, "--transcribe", "--no-vad", "-o", str(tmp_path / "b.md")])
+    assert captured["vad_filter"] is False
+
+
 def test_auto_fallback_to_whisper_when_no_captions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

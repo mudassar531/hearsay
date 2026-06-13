@@ -36,6 +36,7 @@ def transcribe_audio(
     model_size: str = DEFAULT_MODEL,
     language: str | None = None,
     local_files_only: bool = False,
+    vad_filter: bool = True,
     on_progress: ProgressCallback | None = None,
 ) -> TranscriptionResult:
     """Transcribe an audio/video file into timed segments (CPU, int8).
@@ -46,6 +47,10 @@ def transcribe_audio(
         language: Force a language code, or ``None`` to auto-detect.
         local_files_only: If True, never reach the network — load the model
             from the local cache or fail. Used by the offline test suite.
+        vad_filter: Voice-activity detection. ``True`` (default) skips silence
+            and music beds — right for speech (podcasts, talks, meetings). Set
+            ``False`` for music/songs, where VAD would otherwise discard the
+            sung audio as "non-speech" (much slower, less hallucination-proof).
         on_progress: Optional callback invoked with (processed_s, total_s).
 
     Raises:
@@ -65,7 +70,7 @@ def transcribe_audio(
     # slip (e.g. end < start) surfaces honestly, not as a bogus "bad file".
     raw: list[tuple[str, float, float]] = []
     try:
-        segment_iter, info = model.transcribe(str(path), language=language, vad_filter=True)
+        segment_iter, info = model.transcribe(str(path), language=language, vad_filter=vad_filter)
         for seg in segment_iter:
             raw.append((seg.text, seg.start, seg.end))
             if on_progress is not None:

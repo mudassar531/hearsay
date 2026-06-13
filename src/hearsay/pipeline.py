@@ -101,6 +101,7 @@ def ingest_youtube_transcribe(
     *,
     model_size: str = DEFAULT_MODEL,
     language: str | None = None,
+    vad_filter: bool = True,
     metadata_fetcher: MetadataFetcher = fetch_raw_metadata,
     audio_downloader: AudioDownloader = download_audio,
     transcriber: Transcriber = transcribe_audio,
@@ -117,7 +118,11 @@ def ingest_youtube_transcribe(
     with tempfile.TemporaryDirectory(prefix="hearsay-") as tmp:
         audio_path = audio_downloader(url, Path(tmp))
         result = transcriber(
-            audio_path, model_size=model_size, language=language, on_progress=on_progress
+            audio_path,
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter,
+            on_progress=on_progress,
         )
     return assemble_document(
         meta,
@@ -133,6 +138,7 @@ def ingest_file(
     *,
     model_size: str = DEFAULT_MODEL,
     language: str | None = None,
+    vad_filter: bool = True,
     transcriber: Transcriber = transcribe_audio,
     on_progress: Callable[[float, float], None] | None = None,
     now: Callable[[], str] = _utc_now_iso,
@@ -148,7 +154,13 @@ def ingest_file(
             f"Unsupported file type: {path.suffix or '(none)'}",
             hint=f"Supported audio/video extensions: {', '.join(sorted(_AUDIO_EXTENSIONS))}",
         )
-    result = transcriber(path, model_size=model_size, language=language, on_progress=on_progress)
+    result = transcriber(
+        path,
+        model_size=model_size,
+        language=language,
+        vad_filter=vad_filter,
+        on_progress=on_progress,
+    )
     meta = SourceMetadata(
         title=path.stem,
         source=str(path),
@@ -171,6 +183,7 @@ def ingest_episode(
     *,
     model_size: str = DEFAULT_MODEL,
     language: str | None = None,
+    vad_filter: bool = True,
     episode_downloader: EpisodeDownloader = download_episode,
     transcriber: Transcriber = transcribe_audio,
     on_progress: Callable[[float, float], None] | None = None,
@@ -189,7 +202,11 @@ def ingest_episode(
     with tempfile.TemporaryDirectory(prefix="hearsay-") as tmp:
         audio_path = episode_downloader(episode.audio_url, Path(tmp))
         result = transcriber(
-            audio_path, model_size=model_size, language=language, on_progress=on_progress
+            audio_path,
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter,
+            on_progress=on_progress,
         )
     meta = SourceMetadata(
         title=episode.title,

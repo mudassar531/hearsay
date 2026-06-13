@@ -145,6 +145,23 @@ def test_ingest_file_transcribes_with_injected_transcriber(tmp_path: Path) -> No
     assert "welcome to the show" in body
 
 
+def test_ingest_file_threads_vad_filter(tmp_path: Path) -> None:
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"x")
+    seen: dict[str, object] = {}
+
+    def fake_transcriber(path, **kwargs):
+        seen["vad_filter"] = kwargs.get("vad_filter")
+        return _fake_transcription(kwargs["model_size"])
+
+    # Default is VAD on (speech)...
+    ingest_file(clip, transcriber=fake_transcriber, now=lambda: "t")
+    assert seen["vad_filter"] is True
+    # ...and it can be turned off for music.
+    ingest_file(clip, vad_filter=False, transcriber=fake_transcriber, now=lambda: "t")
+    assert seen["vad_filter"] is False
+
+
 def test_ingest_file_missing_path() -> None:
     with pytest.raises(InvalidSourceError) as excinfo:
         ingest_file(Path("/no/such/file.mp3"))

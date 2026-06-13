@@ -169,6 +169,13 @@ def ingest(
         ModelSize,
         typer.Option("--model", help="Whisper model size for transcription."),
     ] = _DEFAULT_MODEL,
+    vad: Annotated[
+        bool,
+        typer.Option(
+            "--vad/--no-vad",
+            help="Voice-activity filter: on for speech (default), --no-vad for music/songs.",
+        ),
+    ] = True,
     write_json: Annotated[
         bool,
         typer.Option("--json", help="Also write a .json sidecar matching the Transcript schema."),
@@ -201,6 +208,7 @@ def ingest(
         language=language,
         transcribe=transcribe,
         model=model.value,
+        vad=vad,
         write_json=write_json,
         latest=latest,
         episode=episode,
@@ -237,6 +245,7 @@ class _Options:
     language: str | None
     transcribe: bool
     model: str
+    vad: bool
     write_json: bool
     latest: bool
     episode: int | None
@@ -255,7 +264,13 @@ def _run_single(document: Document, default_name: str, opts: _Options) -> None:
 
 def _ingest_file(path: Path, opts: _Options) -> Document:
     with _progress(f"Transcribing {path.name} with whisper '{opts.model}'") as cb:
-        return ingest_file(path, model_size=opts.model, language=opts.language, on_progress=cb)
+        return ingest_file(
+            path,
+            model_size=opts.model,
+            language=opts.language,
+            vad_filter=opts.vad,
+            on_progress=cb,
+        )
 
 
 def _ingest_youtube_source(url: str, opts: _Options) -> Document:
@@ -278,7 +293,11 @@ def _transcribe_youtube(url: str, opts: _Options, *, forced: bool) -> Document:
     )
     with _progress("Transcribing audio") as cb:
         return ingest_youtube_transcribe(
-            url, model_size=opts.model, language=opts.language, on_progress=cb
+            url,
+            model_size=opts.model,
+            language=opts.language,
+            vad_filter=opts.vad,
+            on_progress=cb,
         )
 
 
@@ -313,13 +332,13 @@ def _youtube_entry_ingester(entry: PlaylistEntry, opts: _Options) -> Callable[[]
     def _ingest() -> Document:
         if opts.transcribe:
             return ingest_youtube_transcribe(
-                entry.url, model_size=opts.model, language=opts.language
+                entry.url, model_size=opts.model, language=opts.language, vad_filter=opts.vad
             )
         try:
             return ingest_youtube(entry.url, language=opts.language or "en")
         except NoCaptionsError:
             return ingest_youtube_transcribe(
-                entry.url, model_size=opts.model, language=opts.language
+                entry.url, model_size=opts.model, language=opts.language, vad_filter=opts.vad
             )
 
     return _ingest
@@ -327,7 +346,9 @@ def _youtube_entry_ingester(entry: PlaylistEntry, opts: _Options) -> Callable[[]
 
 def _episode_ingester(episode: Episode, show: str, opts: _Options) -> Callable[[], Document]:
     def _ingest() -> Document:
-        return ingest_episode(episode, show, model_size=opts.model, language=opts.language)
+        return ingest_episode(
+            episode, show, model_size=opts.model, language=opts.language, vad_filter=opts.vad
+        )
 
     return _ingest
 

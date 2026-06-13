@@ -28,22 +28,33 @@ def _default_lang() -> str | None:
     return os.environ.get("HEARSAY_LANG") or None
 
 
+def _vad() -> bool:
+    # On by default (speech); set HEARSAY_VAD=0/false/no for music/songs.
+    return os.environ.get("HEARSAY_VAD", "1").strip().lower() not in {"0", "false", "no"}
+
+
 def ingest_url_markdown(url: str, transcribe: bool = False, lang: str | None = None) -> str:
     """Ingest a single YouTube URL and return the markdown (used by the MCP tool)."""
     language = lang if lang is not None else _default_lang()
     if transcribe:
-        document = ingest_youtube_transcribe(url, model_size=_model(), language=language)
+        document = ingest_youtube_transcribe(
+            url, model_size=_model(), language=language, vad_filter=_vad()
+        )
     else:
         try:
             document = ingest_youtube(url, language=language or "en")
         except NoCaptionsError:
-            document = ingest_youtube_transcribe(url, model_size=_model(), language=language)
+            document = ingest_youtube_transcribe(
+                url, model_size=_model(), language=language, vad_filter=_vad()
+            )
     return render_markdown(document)
 
 
 def ingest_file_markdown(path: str) -> str:
     """Transcribe a local file and return the markdown (used by the MCP tool)."""
-    document = _ingest_file(Path(path).expanduser(), model_size=_model(), language=_default_lang())
+    document = _ingest_file(
+        Path(path).expanduser(), model_size=_model(), language=_default_lang(), vad_filter=_vad()
+    )
     return render_markdown(document)
 
 

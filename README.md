@@ -53,6 +53,9 @@ hearsay talk.mp3
 # Force Whisper on a YouTube URL, pick a model, also emit JSON
 hearsay "https://youtu.be/VIDEO_ID" --transcribe --model small --json
 
+# Music/song? Add --no-vad so the lyrics aren't filtered out as "non-speech"
+hearsay "https://youtu.be/SONG_ID" --no-vad
+
 # A podcast feed or YouTube playlist: list, then ingest a selection
 hearsay "https://example.com/feed.xml"
 hearsay "https://example.com/feed.xml" --all --limit 3 --output-dir ./out
@@ -163,6 +166,12 @@ Server configuration (env vars, since MCP tool signatures are fixed):
 | --- | --- | --- |
 | `HEARSAY_MODEL` | `small` | Whisper model size (`tiny`…`large-v3`) |
 | `HEARSAY_LANG` | _(unset)_ | Default language: English captions, else Whisper auto-detect |
+| `HEARSAY_VAD` | `1` | Voice-activity filter; set `0` for music/songs |
+
+> **Speech vs. music:** hearsay is tuned for spoken audio (podcasts, talks,
+> interviews, meetings), where transcription is accurate. For music, pass
+> `--no-vad` so the vocals aren't discarded — but expect a rough, approximate
+> lyric transcript, since Whisper is a speech model, not a lyrics transcriber.
 
 ## CLI reference
 
@@ -174,6 +183,7 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   --lang CODE          Language: captions default to English; transcription auto-detects
   --transcribe         Force local Whisper even when captions exist
   --model SIZE         Whisper model: tiny | base | small | medium | large-v3 (default small)
+  --no-vad             Disable voice-activity filtering (use for music/songs)
   --json               Also write a .json sidecar (Transcript schema)
   --latest             Batch: ingest only the most recent item
   --episode N          Batch: ingest only item N (1-indexed)
