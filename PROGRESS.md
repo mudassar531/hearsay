@@ -50,7 +50,7 @@ Success: no issues found in 3 source files
 - [x] Markdown renderer producing exactly the OUTPUT FORMAT in SPEC.md; `-o/--output` flag, default `./<video-id>.md` — verified: render tests pass; pipeline+CLI wired; `hearsay <url>` and `-o` produce correct files (see examples/)
 - [x] Friendly errors: no captions ("transcription lands in Phase 2"), private/unavailable/invalid URL — verified: 12 error tests pass; live invalid URL & nonexistent video render a hint + exit 1 with no traceback
 - [x] Fixtures: record 2 real transcript+metadata payloads (one video with chapters, one without) into `tests/fixtures/`; unit-test grouping, sectioning, rendering against them — verified: fixtures committed; grouping/sectioning tests run on them; full-chain fixture→render test added
-- [ ] Run end-to-end on 2 real videos; commit outputs to `examples/`
+- [x] Run end-to-end on 2 real videos; commit outputs to `examples/` — verified: both ran in <10s (5.0s / 3.6s); outputs in examples/ (293 + 1121 lines)
 
 **Acceptance:** `uv run hearsay https://www.youtube.com/watch?v=<id>` produces a clean file in <10s · tests pass offline · `examples/` contains 2 real outputs.
 
