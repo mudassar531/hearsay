@@ -11,7 +11,7 @@ Rule: a box is ticked only after its verification command ran and passed. One co
 
 ## PHASE 0 — Scaffold (target: everything runs)
 
-- [ ] Check name availability on PyPI; if taken, propose 5 alternatives, pick the best, use it everywhere
+- [x] Check name availability on PyPI; if taken, propose 5 alternatives, pick the best, use it everywhere — `earshot` taken (HTTP 200); picked `hearsay` (HTTP 404 = free); see DECISIONS.md
 - [ ] `uv init` with `src/hearsay/` layout; pin Python 3.11+
 - [ ] Typer CLI skeleton: `hearsay --version`, `hearsay --help` with the one-liner pitch
 - [ ] Configure ruff + mypy + pytest; add one placeholder test
