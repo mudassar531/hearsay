@@ -108,6 +108,68 @@ README.md   rStL7niR7gs.md   zjkBMFhNj_g.md
 
 **Acceptance:** `uv run hearsay tests/fixtures/sample.wav` produces correct markdown · captionless YouTube video works end-to-end via fallback.
 
+### Phase 2 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg 8.1). An independent
+5-lens gate review (acceptance, spec, transcription code, CLI code, offline
+guarantee) verified the phase; acceptance/spec/offline passed with no confirmed
+blockers, and the surfaced minors were fixed — see DECISIONS.md.
+
+```text
+$ uv run pytest
+........................................................................ [ 67%]
+...................................                                      [100%]
+107 passed in 1.59s
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy
+Success: no issues found in 22 source files
+
+$ uv run hearsay tests/fixtures/sample.wav -o /tmp/p2.md
+╭───────────────────── hearsay ─────────────────────╮
+│ ✓ sample                                          │
+│ 1 sections · 1 paragraphs · method: whisper-small │
+│ → /tmp/p2.md                                      │
+╰───────────────────────────────────────────────────╯
+
+$ head -16 /tmp/p2.md
+---
+title: "sample"
+source: "tests/fixtures/sample.wav"
+channel: "Local file"
+duration: "00:00:04"
+ingested: "..."
+method: "whisper-small"
+language: "en"
+---
+
+# sample
+
+## [00:00:00 – 00:00:04]
+
+**[00:00:00]** The quick brown fox jumps over the lazy dog, hearsay turns audio
+into clean markdown.
+```
+
+Captionless-fallback acceptance, verified live on a genuinely captionless video
+(`aqz-KE-bpKQ`, Big Buck Bunny, captions disabled):
+
+```text
+$ uv run hearsay https://www.youtube.com/watch?v=aqz-KE-bpKQ --model tiny -o /tmp/fallback.md
+No captions found. Falling back to local transcription.
+Downloading audio, then transcribing locally with whisper 'tiny'. This can take a few minutes.
+╭───────────────────────────── hearsay ──────────────────────────────╮
+│ ✓ Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film │
+│ 0 sections · 0 paragraphs · method: whisper-tiny                   │
+╰────────────────────────────────────────────────────────────────────╯
+```
+
+(Big Buck Bunny is a dialogue-free animation, so the transcript is empty —
+correct behaviour. A speech video transcribes with real content: `--transcribe`
+on the 19s "Me at the zoo" yields a clean paragraph, method `whisper-tiny`.)
+
 ## PHASE 3 — Scale: podcasts, playlists, JSON
 
 - [ ] Podcast RSS: `hearsay <feed-url>` lists episodes (rich table); `--latest`, `--episode N`, `--all --limit N`
