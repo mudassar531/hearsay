@@ -227,10 +227,10 @@ the batch did not abort.
 
 ## PHASE 4 — Distribution hack: MCP server mode
 
-- [ ] Add the official `mcp` Python SDK; `hearsay mcp` starts a stdio MCP server exposing two tools: `ingest_url(url, transcribe?, lang?)` and `ingest_file(path)` — both return the markdown string
-- [ ] Keep MCP deps in an optional extra (`pip install hearsay[mcp]`) if they're heavy
-- [ ] Round-trip test: spawn the server, call `ingest_file` on the fixture clip, assert markdown comes back
-- [ ] README section: "Give your agent ears" — exact JSON config snippets for Claude Code and Claude Desktop
+- [x] Add the official `mcp` Python SDK; `hearsay mcp` starts a stdio MCP server exposing two tools: `ingest_url(url, transcribe?, lang?)` and `ingest_file(path)` — both return the markdown string — verified: `hearsay --help` lists `mcp`; round-trip test lists both tools and gets markdown back
+- [x] Keep MCP deps in an optional extra (`pip install hearsay[mcp]`); `hearsay mcp` prints an install hint if absent — verified: `[project.optional-dependencies].mcp`; lazy import in mcp_server with friendly error
+- [x] Round-trip test: spawn the server, call `ingest_file` on the fixture clip, assert markdown comes back — verified: `test_mcp_stdio_roundtrip` spawns `python -m hearsay mcp` and asserts markdown (offline via HF_HUB_OFFLINE, skips if model uncached)
+- [x] README section: "Give your agent ears" — exact JSON config snippets for Claude Code and Claude Desktop — verified: both snippets parse as JSON (`type: stdio`); `claude mcp add` syntax + filenames confirmed via claude-code-guide
 
 **Acceptance:** MCP round-trip test passes · config snippet verified syntactically.
 

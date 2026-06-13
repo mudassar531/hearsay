@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from rich.table import Table
+from typer.core import TyperGroup
 
 from hearsay import __version__
 from hearsay.batch import BatchItem, ensure_unique_slugs, run_batch, select, slugify
@@ -61,7 +62,29 @@ class ModelSize(StrEnum):
 _DEFAULT_MODEL = ModelSize(DEFAULT_MODEL)
 _DEFAULT_OUTPUT_DIR = Path("./hearsay-out")
 
-app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+class DefaultCommandGroup(TyperGroup):
+    """A command group whose default command is ``ingest``.
+
+    Lets ``hearsay <SOURCE> [options]`` work without typing ``ingest`` while
+    still supporting the ``mcp`` subcommand. If the first argument is neither a
+    known command nor an option, ``ingest`` is prepended.
+    """
+
+    default_command = "ingest"
+
+    def resolve_command(self, ctx, args):
+        if args and not args[0].startswith("-") and args[0] not in self.commands:
+            args = [self.default_command, *args]
+        return super().resolve_command(ctx, args)
+
+
+app = typer.Typer(
+    cls=DefaultCommandGroup,
+    add_completion=False,
+    no_args_is_help=True,
+    help=PITCH,
+)
 console = Console()
 err_console = Console(stderr=True)
 
@@ -72,8 +95,34 @@ def _show_version(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.command(help=PITCH)
-def main(
+@app.callback()
+def _root(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_show_version, is_eager=True, help="Show the version and exit."
+        ),
+    ] = False,
+) -> None:
+    """crawl4ai for video & audio — clean, timestamped, LLM-ready transcripts."""
+
+
+@app.command("mcp", help="Run the MCP stdio server (give your AI agent ears).")
+def mcp_command() -> None:
+    """Start the hearsay MCP server on stdio."""
+    from hearsay.mcp_server import run_server
+
+    try:
+        run_server()
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except HearsayError as exc:
+        _print_error(exc)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command("ingest", help=PITCH)
+def ingest(
     source: Annotated[
         str,
         typer.Argument(
@@ -137,12 +186,6 @@ def main(
             "--limit", help="Batch: cap the number ingested with --all.", show_default=False
         ),
     ] = None,
-    version: Annotated[
-        bool,
-        typer.Option(
-            "--version", callback=_show_version, is_eager=True, help="Show the version and exit."
-        ),
-    ] = False,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
     opts = _Options(
