@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import parse_qs, urlparse
 
 from hearsay.errors import (
     AudioDownloadError,
@@ -30,7 +31,7 @@ _METADATA_TIMEOUT_S = 60
 _DOWNLOAD_TIMEOUT_S = 600
 
 
-_PLAYLIST_ID = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
+_PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class PlaylistEntry(NamedTuple):
@@ -53,13 +54,18 @@ def extract_video_id(url: str) -> str | None:
 def extract_playlist_id(url: str) -> str | None:
     """Return the playlist id from a canonical /playlist?list=... URL, else None.
 
-    A ``watch?v=...&list=...`` URL is treated as a single video (returns None),
-    so pasting a video that happens to be in a playlist ingests just that video.
+    The path must be exactly ``/playlist`` (parsed, not substring-matched), so a
+    ``watch?v=...&list=...`` URL — or a watch URL with ``/playlist`` buried in a
+    query param — is treated as a single video and ingests just that video.
     """
-    if "/playlist" not in url:
+    parsed = urlparse(url)
+    if parsed.path.rstrip("/") != "/playlist":
         return None
-    match = _PLAYLIST_ID.search(url)
-    return match.group(1) if match else None
+    values = parse_qs(parsed.query).get("list")
+    if not values:
+        return None
+    candidate = values[0]
+    return candidate if _PLAYLIST_ID.match(candidate) else None
 
 
 def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:

@@ -109,10 +109,11 @@ def _duration_seconds(entry: feedparser.FeedParserDict) -> float:
             total = 0.0
             for part in parts:
                 total = total * 60 + part
-            return total
-        return float(raw)
+        else:
+            total = float(raw)
     except ValueError:
         return 0.0
+    return max(0.0, total)  # a malformed/negative duration falls back to "unknown"
 
 
 def download_episode(url: str, dest_dir: Path) -> Path:
@@ -124,6 +125,7 @@ def download_episode(url: str, dest_dir: Path) -> Path:
     try:
         with urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_S) as response:
             suffix = _suffix_for(url, response.headers.get("Content-Type"))
+            expected = _content_length(response.headers.get("Content-Length"))
             dest = dest_dir / f"episode{suffix}"
             with dest.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
@@ -132,12 +134,26 @@ def download_episode(url: str, dest_dir: Path) -> Path:
             f"Could not download episode audio from {url}: {exc}",
             hint="Check the feed's media URL is reachable, then try again.",
         ) from exc
-    if dest.stat().st_size == 0:
+    written = dest.stat().st_size
+    if written == 0:
         raise AudioDownloadError(
             f"Downloaded an empty file from {url}.",
             hint="The episode media URL may be broken; try another episode.",
         )
+    if expected is not None and written < expected:
+        raise AudioDownloadError(
+            f"Incomplete download from {url}: got {written} of {expected} bytes.",
+            hint="The connection dropped mid-download; try again.",
+        )
     return dest
+
+
+def _content_length(value: str | None) -> int | None:
+    """Parse a Content-Length header into a positive int, or None if absent/bad."""
+    if value and value.isdigit():
+        size = int(value)
+        return size if size > 0 else None
+    return None
 
 
 def _suffix_for(url: str, content_type: str | None) -> str:

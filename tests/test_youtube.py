@@ -117,7 +117,11 @@ def test_pick_downloaded_audio_none_when_only_sidecars(tmp_path: Path) -> None:
         ("https://youtube.com/playlist?list=PLxyz&foo=1", "PLxyz"),
         ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc", None),  # video, not playlist
         ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None),
+        ("https://m.youtube.com/playlist?list=PLabc", "PLabc"),
         ("https://example.com/playlist?list=PLabc", "PLabc"),
+        # A watch URL with "/playlist" buried in a query param must NOT misroute.
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&next=/playlist?list=EVIL", None),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&foo=/playlist&list=PLXYZ", None),
     ],
 )
 def test_extract_playlist_id(url: str, expected: str | None) -> None:

@@ -266,6 +266,18 @@ def test_json_sidecar_written_and_valid(tmp_path: Path, monkeypatch: pytest.Monk
     assert transcript.chunks[0].section  # every chunk is tagged with its section
 
 
+def test_json_sidecar_does_not_clobber_md_when_output_ends_in_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    dest = tmp_path / "report.json"
+    result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "--json", "-o", str(dest)])
+    assert result.exit_code == 0, result.output
+    # Markdown went to the -o target; the JSON sidecar did not overwrite it.
+    assert dest.read_text().startswith("---\n")
+    assert (tmp_path / "report.json.json").exists()
+
+
 # --- Batch: playlists and feeds -------------------------------------------
 
 
@@ -353,3 +365,19 @@ def test_feed_episode_n_ingests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result.exit_code == 0, result.output
     assert captured["title"] == "Episode 2"
     assert len(list(out.glob("*.md"))) == 1
+
+
+def test_feed_colliding_titles_do_not_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two distinct titles that slugify to the same stem must yield two files.
+    episodes = [
+        Episode(title="Ep #1: Hi!", audio_url="http://x/1.mp3", duration_s=60.0, guid="a"),
+        Episode(title="Ep 1 Hi", audio_url="http://x/2.mp3", duration_s=60.0, guid="b"),
+    ]
+    monkeypatch.setattr(cli, "fetch_feed", lambda url: Feed(title="Show", episodes=episodes))
+    monkeypatch.setattr(cli, "ingest_episode", lambda ep, show, **k: _whisper_doc(ep.title))
+    out = tmp_path / "out"
+    result = runner.invoke(app, ["https://example.com/feed.xml", "--all", "--output-dir", str(out)])
+    assert result.exit_code == 0, result.output
+    assert len(list(out.glob("*.md"))) == 2  # no silent overwrite

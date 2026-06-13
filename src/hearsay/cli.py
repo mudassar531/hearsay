@@ -7,8 +7,9 @@ selection into an output directory. A single command keeps option order natural;
 the ``mcp`` subcommand planned for Phase 4 will convert this into a group.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -20,7 +21,7 @@ from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedCo
 from rich.table import Table
 
 from hearsay import __version__
-from hearsay.batch import BatchItem, run_batch, select, slugify
+from hearsay.batch import BatchItem, ensure_unique_slugs, run_batch, select, slugify
 from hearsay.errors import HearsayError, OutputWriteError
 from hearsay.feeds import Episode, fetch_feed
 from hearsay.models import Document, Transcript
@@ -144,19 +145,31 @@ def main(
     ] = False,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
+    opts = _Options(
+        output=output,
+        output_dir=output_dir,
+        language=language,
+        transcribe=transcribe,
+        model=model.value,
+        write_json=write_json,
+        latest=latest,
+        episode=episode,
+        all_=all_,
+        limit=limit,
+    )
     try:
         path = Path(source).expanduser()
+        video_id = extract_video_id(source)
         if path.is_file():
-            _run_single(_ingest_file(path, language, model.value), path.stem, output, write_json)
+            _run_single(_ingest_file(path, opts), path.stem, opts)
         elif extract_playlist_id(source) is not None:
-            _run_playlist(source, locals())
-        elif extract_video_id(source) is not None:
-            document = _ingest_youtube_source(source, language, transcribe, model.value)
-            _run_single(document, extract_video_id(source) or "video", output, write_json)
+            _run_playlist(source, opts)
+        elif video_id is not None:
+            _run_single(_ingest_youtube_source(source, opts), video_id, opts)
         elif source.startswith(("http://", "https://")):
-            _run_feed(source, locals())
+            _run_feed(source, opts)
         else:
-            _run_single(_ingest_file(path, language, model.value), path.stem, output, write_json)
+            _run_single(_ingest_file(path, opts), path.stem, opts)
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130) from None
@@ -165,96 +178,106 @@ def main(
         raise typer.Exit(code=1) from exc
 
 
+@dataclass(frozen=True)
+class _Options:
+    """Resolved CLI options, passed explicitly so a typo can't become a KeyError."""
+
+    output: Path | None
+    output_dir: Path
+    language: str | None
+    transcribe: bool
+    model: str
+    write_json: bool
+    latest: bool
+    episode: int | None
+    all_: bool
+    limit: int | None
+
+
 # --- Single-source ingestion ---------------------------------------------
 
 
-def _run_single(
-    document: Document, default_name: str, output: Path | None, write_json: bool
-) -> None:
-    destination = output if output is not None else Path(f"./{default_name}.md")
-    written = _write_document(document, destination, write_json=write_json)
+def _run_single(document: Document, default_name: str, opts: _Options) -> None:
+    destination = opts.output if opts.output is not None else Path(f"./{default_name}.md")
+    written = _write_document(document, destination, write_json=opts.write_json)
     _print_success(document, written)
 
 
-def _ingest_file(path: Path, language: str | None, model: str) -> Document:
-    with _progress(f"Transcribing {path.name} with whisper '{model}'") as cb:
-        return ingest_file(path, model_size=model, language=language, on_progress=cb)
+def _ingest_file(path: Path, opts: _Options) -> Document:
+    with _progress(f"Transcribing {path.name} with whisper '{opts.model}'") as cb:
+        return ingest_file(path, model_size=opts.model, language=opts.language, on_progress=cb)
 
 
-def _ingest_youtube_source(
-    url: str, language: str | None, transcribe: bool, model: str
-) -> Document:
+def _ingest_youtube_source(url: str, opts: _Options) -> Document:
     """Captions path, or whisper — forced by --transcribe or auto on no captions."""
-    if transcribe:
-        return _transcribe_youtube(url, model, language, forced=True)
+    if opts.transcribe:
+        return _transcribe_youtube(url, opts, forced=True)
     video_id = extract_video_id(url) or url
     try:
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
-            return ingest_youtube(url, language=language or "en")
+            return ingest_youtube(url, language=opts.language or "en")
     except NoCaptionsError:
         console.print("[yellow]No captions found.[/yellow] Falling back to local transcription.")
-        return _transcribe_youtube(url, model, language, forced=False)
+        return _transcribe_youtube(url, opts, forced=False)
 
 
-def _transcribe_youtube(url: str, model: str, language: str | None, *, forced: bool) -> Document:
+def _transcribe_youtube(url: str, opts: _Options, *, forced: bool) -> Document:
     why = "Transcribing" if forced else "Downloading audio, then transcribing"
-    console.print(f"[dim]{why} locally with whisper '{model}'. This can take a few minutes.[/dim]")
+    console.print(
+        f"[dim]{why} locally with whisper '{opts.model}'. This can take a few minutes.[/dim]"
+    )
     with _progress("Transcribing audio") as cb:
-        return ingest_youtube_transcribe(url, model_size=model, language=language, on_progress=cb)
+        return ingest_youtube_transcribe(
+            url, model_size=opts.model, language=opts.language, on_progress=cb
+        )
 
 
 # --- Batch ingestion (playlists & feeds) ----------------------------------
 
 
-def _run_playlist(url: str, opts: dict) -> None:
+def _run_playlist(url: str, opts: _Options) -> None:
     with console.status("[bold]Listing playlist…", spinner="dots"):
         title, entries = fetch_playlist(url)
     items = [
-        BatchItem(
-            title=e.title,
-            slug=e.video_id,
-            ingest=_youtube_entry_ingester(
-                e, opts["language"], opts["transcribe"], opts["model"].value
-            ),
-        )
+        BatchItem(title=e.title, slug=e.video_id, ingest=_youtube_entry_ingester(e, opts))
         for e in entries
     ]
-    _run_batch_or_list(items, title, "video", opts, has_duration=False, entries=entries)
+    _run_batch_or_list(items, title, "video", opts, episodes=None)
 
 
-def _run_feed(url: str, opts: dict) -> None:
+def _run_feed(url: str, opts: _Options) -> None:
     with console.status("[bold]Fetching feed…", spinner="dots"):
         feed = fetch_feed(url)
     items = [
         BatchItem(
             title=ep.title,
             slug=slugify(ep.title, fallback=f"episode-{i}"),
-            ingest=_episode_ingester(ep, feed.title, opts["language"], opts["model"].value),
+            ingest=_episode_ingester(ep, feed.title, opts),
         )
         for i, ep in enumerate(feed.episodes, start=1)
     ]
-    _run_batch_or_list(
-        items, feed.title, "episode", opts, has_duration=True, episodes=feed.episodes
-    )
+    _run_batch_or_list(items, feed.title, "episode", opts, episodes=feed.episodes)
 
 
-def _youtube_entry_ingester(
-    entry: PlaylistEntry, language: str | None, transcribe: bool, model: str
-):
+def _youtube_entry_ingester(entry: PlaylistEntry, opts: _Options) -> Callable[[], Document]:
     def _ingest() -> Document:
-        if transcribe:
-            return ingest_youtube_transcribe(entry.url, model_size=model, language=language)
+        if opts.transcribe:
+            return ingest_youtube_transcribe(
+                entry.url, model_size=opts.model, language=opts.language
+            )
         try:
-            return ingest_youtube(entry.url, language=language or "en")
+            return ingest_youtube(entry.url, language=opts.language or "en")
         except NoCaptionsError:
-            return ingest_youtube_transcribe(entry.url, model_size=model, language=language)
+            return ingest_youtube_transcribe(
+                entry.url, model_size=opts.model, language=opts.language
+            )
 
     return _ingest
 
 
-def _episode_ingester(episode: Episode, show: str, language: str | None, model: str):
+def _episode_ingester(episode: Episode, show: str, opts: _Options) -> Callable[[], Document]:
     def _ingest() -> Document:
-        return ingest_episode(episode, show, model_size=model, language=language)
+        return ingest_episode(episode, show, model_size=opts.model, language=opts.language)
 
     return _ingest
 
@@ -263,35 +286,38 @@ def _run_batch_or_list(
     items: list[BatchItem],
     source_title: str,
     noun: str,
-    opts: dict,
+    opts: _Options,
     *,
-    has_duration: bool,
-    entries: list[PlaylistEntry] | None = None,
-    episodes: list[Episode] | None = None,
+    episodes: list[Episode] | None,
 ) -> None:
+    ensure_unique_slugs(items)  # distinct items must not overwrite each other's output
     selected = select(
-        items,
-        latest=opts["latest"],
-        episode=opts["episode"],
-        all_=opts["all_"],
-        limit=opts["limit"],
+        items, latest=opts.latest, episode=opts.episode, all_=opts.all_, limit=opts.limit
     )
     if not selected:
         _print_listing(items, source_title, noun, episodes=episodes)
         return
 
-    output_dir: Path = opts["output_dir"]
-    write_json: bool = opts["write_json"]
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _make_output_dir(opts.output_dir)
 
     def write(document: Document, slug: str) -> Path:
-        return _write_document(document, output_dir / f"{slug}.md", write_json=write_json)
+        return _write_document(document, opts.output_dir / f"{slug}.md", write_json=opts.write_json)
 
     def announce(index: int, total: int, item: BatchItem) -> None:
         console.print(f"[bold blue]\\[{index}/{total}][/bold blue] {item.title}")
 
     results = run_batch(selected, write, on_item=announce)
-    _print_summary(results, output_dir)
+    _print_summary(results, opts.output_dir)
+
+
+def _make_output_dir(output_dir: Path) -> None:
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OutputWriteError(
+            f"Could not create output directory {output_dir}: {exc.strerror or exc}",
+            hint="Pick a writable --output-dir whose path is not an existing file.",
+        ) from exc
 
 
 # --- Output writing -------------------------------------------------------
@@ -302,6 +328,8 @@ def _write_document(document: Document, destination: Path, *, write_json: bool) 
     _write_text(destination, render_markdown(document))
     if write_json:
         sidecar = destination.with_suffix(".json")
+        if sidecar == destination:  # destination already ends in .json — don't clobber it
+            sidecar = destination.with_name(destination.name + ".json")
         transcript = Transcript.from_document(document)
         _write_text(sidecar, transcript.model_dump_json(indent=2) + "\n")
     return destination

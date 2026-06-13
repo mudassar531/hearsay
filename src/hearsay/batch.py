@@ -57,6 +57,11 @@ def select(
     (optionally capped by ``limit``). With no flag, returns [] — the caller
     lists the items instead of ingesting.
     """
+    if limit is not None and limit < 1:
+        raise InvalidSourceError(
+            f"--limit must be 1 or more (got {limit}).",
+            hint="Use --limit N with N >= 1, or omit it to ingest everything.",
+        )
     count = len(items)
     if episode is not None:
         if episode < 1 or episode > count:
@@ -70,6 +75,24 @@ def select(
     if all_:
         return items[:limit] if limit is not None else items
     return []
+
+
+def ensure_unique_slugs(items: list[BatchItem]) -> None:
+    """Make every item's slug unique in place, suffixing collisions -2, -3, ...
+
+    Distinct items can slugify to the same stem (e.g. two episode titles that
+    differ only in punctuation); without this they would overwrite each other's
+    output files. The first occurrence keeps the base slug.
+    """
+    used: set[str] = set()
+    for item in items:
+        slug = item.slug
+        n = 1
+        while slug in used:
+            n += 1
+            slug = f"{item.slug}-{n}"
+        used.add(slug)
+        item.slug = slug
 
 
 def run_batch(

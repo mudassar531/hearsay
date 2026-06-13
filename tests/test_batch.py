@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from hearsay.batch import BatchItem, run_batch, select, slugify
+from hearsay.batch import BatchItem, ensure_unique_slugs, run_batch, select, slugify
 from hearsay.errors import InvalidSourceError, TranscriptionError
 from hearsay.models import Document, SourceMetadata
 
@@ -53,6 +53,27 @@ def test_select_episode_out_of_range(bad: int) -> None:
     with pytest.raises(InvalidSourceError) as excinfo:
         select(_items(5), latest=False, episode=bad, all_=False, limit=None)
     assert "out of range" in excinfo.value.message
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_select_rejects_non_positive_limit(bad: int) -> None:
+    with pytest.raises(InvalidSourceError) as excinfo:
+        select(_items(5), latest=False, episode=None, all_=True, limit=bad)
+    assert "--limit" in excinfo.value.message
+
+
+# --- slug uniqueness ------------------------------------------------------
+
+
+def test_ensure_unique_slugs_disambiguates_collisions() -> None:
+    items = [
+        BatchItem(title="A", slug="dup", ingest=lambda: _doc("x")),
+        BatchItem(title="B", slug="dup", ingest=lambda: _doc("x")),
+        BatchItem(title="C", slug="dup", ingest=lambda: _doc("x")),
+        BatchItem(title="D", slug="other", ingest=lambda: _doc("x")),
+    ]
+    ensure_unique_slugs(items)
+    assert [i.slug for i in items] == ["dup", "dup-2", "dup-3", "other"]
 
 
 # --- run loop -------------------------------------------------------------
