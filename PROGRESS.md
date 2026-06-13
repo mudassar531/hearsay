@@ -48,7 +48,7 @@ Success: no issues found in 3 source files
 - [x] Implement the paragraph-grouping algorithm (pause threshold + sentence boundaries + 40–120 word targets) as a pure, heavily-tested function — verified: 67 tests pass; lossless + 100% word-budget on both real fixtures; chosen via judge panel (see DECISIONS.md)
 - [x] Chapter-aware sectioning: chapters → `##` headings; no chapters → time-based sections every ~5 minutes — verified: 8 sectioning tests pass against the real chapter fixture and synthetic time-window cases
 - [x] Markdown renderer producing exactly the OUTPUT FORMAT in SPEC.md; `-o/--output` flag, default `./<video-id>.md` — verified: render tests pass; pipeline+CLI wired; `hearsay <url>` and `-o` produce correct files (see examples/)
-- [ ] Friendly errors: no captions ("transcription lands in Phase 2"), private/unavailable/invalid URL
+- [x] Friendly errors: no captions ("transcription lands in Phase 2"), private/unavailable/invalid URL — verified: 12 error tests pass; live invalid URL & nonexistent video render a hint + exit 1 with no traceback
 - [ ] Fixtures: record 2 real transcript+metadata payloads (one video with chapters, one without) into `tests/fixtures/`; unit-test grouping, sectioning, rendering against them
 - [ ] Run end-to-end on 2 real videos; commit outputs to `examples/`
 

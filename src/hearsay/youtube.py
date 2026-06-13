@@ -5,7 +5,12 @@ import re
 import subprocess
 import sys
 
-from hearsay.errors import InvalidSourceError, MetadataError, VideoUnavailableError
+from hearsay.errors import (
+    HearsayError,
+    InvalidSourceError,
+    MetadataError,
+    VideoUnavailableError,
+)
 from hearsay.models import Chapter, SourceMetadata
 
 _URL_PATTERNS = [
@@ -65,7 +70,7 @@ def fetch_raw_metadata(url: str) -> dict:
     return raw
 
 
-def _map_ytdlp_error(url: str, stderr: str) -> Exception:
+def _map_ytdlp_error(url: str, stderr: str) -> HearsayError:
     """Translate yt-dlp stderr into a friendly hearsay error."""
     lowered = stderr.lower()
     if "private video" in lowered:
