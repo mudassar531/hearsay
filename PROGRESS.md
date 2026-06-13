@@ -179,6 +179,52 @@ on the 19s "Me at the zoo" yields a clean paragraph, method `whisper-tiny`.)
 
 **Acceptance:** one command ingests 3 podcast episodes into a folder with markdown+json · tests pass.
 
+### Phase 3 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15). An independent 6-lens gate
+review (acceptance, spec, feeds/playlist code, batch/CLI code, JSON/schema,
+offline) verified the phase; acceptance/spec/JSON/offline passed, and its one
+confirmed blocker (feed slug collisions = silent overwrite) plus several minors
+were fixed — see DECISIONS.md.
+
+```text
+$ uv run pytest
+........................................................................ [ 96%]
+.....                                                                    [100%]
+149 passed in 1.66s
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy
+Success: no issues found in 27 source files
+```
+
+Acceptance — one command ingests 3 podcast episodes to a folder with markdown+json
+(Merriam-Webster Word of the Day, ~2-min episodes, whisper-tiny):
+
+```text
+$ uv run hearsay "https://www.merriam-webster.com/wotd/feed/rss2" --all --limit 3 --json --model tiny --output-dir /tmp/pod-out
+[1/3] blandishment
+[2/3] saturnine
+[3/3] foible
+                     hearsay batch
+┏━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Status ┃ Item         ┃ Output / error               ┃
+┡━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ✓      │ blandishment │ /tmp/pod-out/blandishment.md │
+│ ✓      │ saturnine    │ /tmp/pod-out/saturnine.md    │
+│ ✓      │ foible       │ /tmp/pod-out/foible.md       │
+└────────┴──────────────┴──────────────────────────────┘
+3 succeeded · → /tmp/pod-out/
+$ ls /tmp/pod-out/
+blandishment.json  blandishment.md  foible.json  foible.md  saturnine.json  saturnine.md
+```
+
+Continue-past-failure also verified live: a feed whose newest episode's media
+returned HTTP 404 produced a red ✗ row with the reason, exit 0, no traceback —
+the batch did not abort.
+
 ## PHASE 4 — Distribution hack: MCP server mode
 
 - [ ] Add the official `mcp` Python SDK; `hearsay mcp` starts a stdio MCP server exposing two tools: `ingest_url(url, transcribe?, lang?)` and `ingest_file(path)` — both return the markdown string
