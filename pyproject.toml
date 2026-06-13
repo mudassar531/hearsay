@@ -10,6 +10,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
+    "faster-whisper>=1.2.1",
     "pydantic>=2.13.4",
     "typer>=0.26.7",
     "youtube-transcript-api>=1.2.4",
@@ -59,6 +60,11 @@ warn_unused_ignores = true
 # Lenient policy: no strict mode; untyped third-party deps get scoped
 # [[tool.mypy.overrides]] entries instead of a global ignore_missing_imports,
 # so first-party import typos still fail.
+
+[[tool.mypy.overrides]]
+# faster-whisper ships no type stubs or py.typed marker.
+module = ["faster_whisper.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

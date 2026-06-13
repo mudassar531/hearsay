@@ -3,10 +3,19 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from hearsay.captions import CaptionResult, normalize_snippets
-from hearsay.models import Document
-from hearsay.pipeline import build_document, ingest_youtube
+from hearsay.errors import InvalidSourceError
+from hearsay.models import Document, Segment
+from hearsay.pipeline import (
+    build_document,
+    ingest_file,
+    ingest_youtube,
+    ingest_youtube_transcribe,
+)
 from hearsay.render import render_markdown
+from hearsay.transcribe import TranscriptionResult
 from hearsay.youtube import parse_metadata
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -96,3 +105,87 @@ def test_render_full_chain_from_chapter_fixture() -> None:
     body = markdown.split("\n---\n", 1)[-1]
     body_words = [w for w in body.split() if not w.startswith(("#", "**[", "[")) and ":" not in w]
     assert "language" in body_words and "models" in body_words
+
+
+# --- Whisper paths (offline via injected transcriber / downloader) --------
+
+
+def _fake_transcription(model_size: str) -> TranscriptionResult:
+    return TranscriptionResult(
+        segments=[
+            Segment(text="Hello and welcome to the show.", start_s=0.0, end_s=4.0),
+            Segment(text="Today we talk about audio.", start_s=4.0, end_s=8.0),
+        ],
+        language="en",
+        duration_s=8.0,
+        model_size=model_size,
+    )
+
+
+def test_ingest_file_transcribes_with_injected_transcriber(tmp_path: Path) -> None:
+    clip = tmp_path / "my recording.mp3"
+    clip.write_bytes(b"not really audio")
+
+    def fake_transcriber(path, **kwargs):
+        assert path == clip
+        return _fake_transcription(kwargs["model_size"])
+
+    doc = ingest_file(
+        clip,
+        model_size="tiny",
+        transcriber=fake_transcriber,
+        now=lambda: "2026-06-13T10:00:00Z",
+    )
+    assert doc.method == "whisper-tiny"
+    assert doc.meta.title == "my recording"
+    assert doc.meta.channel == "Local file"
+    assert doc.meta.duration_s == 8.0
+    assert doc.meta.video_id == "my recording"
+    body = " ".join(p.text for s in doc.sections for p in s.paragraphs)
+    assert "welcome to the show" in body
+
+
+def test_ingest_file_missing_path() -> None:
+    with pytest.raises(InvalidSourceError) as excinfo:
+        ingest_file(Path("/no/such/file.mp3"))
+    assert "not found" in excinfo.value.message.lower()
+
+
+def test_ingest_file_unsupported_extension(tmp_path: Path) -> None:
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hi")
+    with pytest.raises(InvalidSourceError) as excinfo:
+        ingest_file(notes)
+    assert "unsupported" in excinfo.value.message.lower()
+    assert excinfo.value.hint
+
+
+def test_ingest_youtube_transcribe_keeps_metadata_and_cleans_temp(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_metadata(url: str) -> dict:
+        return load_meta("zjkBMFhNj_g")  # has chapters
+
+    def fake_downloader(url: str, dest_dir: Path) -> Path:
+        seen["dest_dir"] = dest_dir
+        assert dest_dir.exists()  # a real temp dir during the call
+        audio = dest_dir / "audio.m4a"
+        audio.write_bytes(b"x")
+        return audio
+
+    def fake_transcriber(path, **kwargs):
+        return _fake_transcription(kwargs["model_size"])
+
+    doc = ingest_youtube_transcribe(
+        "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+        model_size="small",
+        metadata_fetcher=fake_metadata,
+        audio_downloader=fake_downloader,
+        transcriber=fake_transcriber,
+        now=lambda: "2026-06-13T10:00:00Z",
+    )
+    assert doc.method == "whisper-small"
+    assert doc.meta.title == "[1hr Talk] Intro to Large Language Models"
+    assert doc.meta.chapters  # chapters preserved from metadata
+    # The temp directory is deleted once the context manager exits.
+    assert not Path(str(seen["dest_dir"])).exists()

@@ -1,21 +1,41 @@
-"""Orchestrate the YouTube → markdown ingestion pipeline.
+"""Orchestrate ingestion: YouTube captions, YouTube transcription, local files.
 
-Ties together metadata fetching, caption retrieval, paragraph grouping,
-sectioning, and document assembly. The network-touching steps are injected
-as callables so the assembly logic can be tested offline against fixtures.
+Ties together metadata, captions or whisper transcription, paragraph grouping,
+sectioning, and document assembly. Network/transcription steps are injected as
+callables so the assembly logic can be tested offline against fixtures.
 """
 
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from hearsay.captions import CaptionResult, fetch_captions
+from hearsay.errors import InvalidSourceError, NoCaptionsError
 from hearsay.grouping import group_segments
-from hearsay.models import Document, SourceMetadata
+from hearsay.models import Document, Segment, SourceMetadata
 from hearsay.sectioning import sectionize
-from hearsay.youtube import fetch_raw_metadata, parse_metadata
+from hearsay.transcribe import DEFAULT_MODEL, TranscriptionResult, transcribe_audio
+from hearsay.youtube import download_audio, fetch_raw_metadata, parse_metadata
 
 MetadataFetcher = Callable[[str], dict]
 CaptionFetcher = Callable[[str, str], CaptionResult]
+AudioDownloader = Callable[[str, Path], Path]
+Transcriber = Callable[..., TranscriptionResult]
+
+_AUDIO_EXTENSIONS = {
+    ".mp3",
+    ".mp4",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".webm",
+    ".mkv",
+    ".mov",
+}
 
 
 def _utc_now_iso() -> str:
@@ -23,27 +43,35 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_document(
+def assemble_document(
     meta: SourceMetadata,
-    captions: CaptionResult,
+    segments: list[Segment],
     *,
+    method: str,
+    language: str,
     ingested_at: str,
 ) -> Document:
-    """Assemble a Document from metadata and captions (pure).
-
-    Groups caption segments into paragraphs, sections them by chapter (or by
-    ~5-minute windows when there are no chapters), and records the method as
-    ``captions`` (manual) or ``captions-auto`` (auto-generated).
-    """
-    paragraphs = group_segments(captions.segments)
+    """Group segments into paragraphs and section them into a Document (pure)."""
+    paragraphs = group_segments(segments)
     sections = sectionize(paragraphs, meta.chapters)
-    method = "captions-auto" if captions.is_generated else "captions"
     return Document(
         meta=meta,
         method=method,
-        language=captions.language_code,
+        language=language,
         ingested_at=ingested_at,
         sections=sections,
+    )
+
+
+def build_document(meta: SourceMetadata, captions: CaptionResult, *, ingested_at: str) -> Document:
+    """Assemble a Document from metadata and fetched captions (pure)."""
+    method = "captions-auto" if captions.is_generated else "captions"
+    return assemble_document(
+        meta,
+        captions.segments,
+        method=method,
+        language=captions.language_code,
+        ingested_at=ingested_at,
     )
 
 
@@ -55,13 +83,91 @@ def ingest_youtube(
     caption_fetcher: CaptionFetcher = fetch_captions,
     now: Callable[[], str] = _utc_now_iso,
 ) -> Document:
-    """Ingest a YouTube URL into a Document via the captions path.
+    """Ingest a YouTube URL via the captions path.
 
-    The network steps default to the real fetchers but are injectable for
-    offline testing. Raises the hearsay errors documented on the fetchers
-    (VideoUnavailableError, NoCaptionsError, MetadataError, ...).
+    Raises NoCaptionsError when the video has no captions (the CLI falls back
+    to transcription), plus the other documented youtube/caption errors.
     """
     raw = metadata_fetcher(url)
     meta = parse_metadata(raw, url)
     captions = caption_fetcher(meta.video_id, language)
     return build_document(meta, captions, ingested_at=now())
+
+
+def ingest_youtube_transcribe(
+    url: str,
+    *,
+    model_size: str = DEFAULT_MODEL,
+    language: str | None = None,
+    metadata_fetcher: MetadataFetcher = fetch_raw_metadata,
+    audio_downloader: AudioDownloader = download_audio,
+    transcriber: Transcriber = transcribe_audio,
+    on_progress: Callable[[float, float], None] | None = None,
+    now: Callable[[], str] = _utc_now_iso,
+) -> Document:
+    """Ingest a YouTube URL by downloading its audio and transcribing it.
+
+    Keeps the video's real metadata (title/channel/chapters) from yt-dlp, then
+    transcribes the audio with whisper. The downloaded audio is always deleted.
+    """
+    raw = metadata_fetcher(url)
+    meta = parse_metadata(raw, url)
+    with tempfile.TemporaryDirectory(prefix="hearsay-") as tmp:
+        audio_path = audio_downloader(url, Path(tmp))
+        result = transcriber(
+            audio_path, model_size=model_size, language=language, on_progress=on_progress
+        )
+    return assemble_document(
+        meta,
+        result.segments,
+        method=f"whisper-{result.model_size}",
+        language=result.language,
+        ingested_at=now(),
+    )
+
+
+def ingest_file(
+    path: Path,
+    *,
+    model_size: str = DEFAULT_MODEL,
+    language: str | None = None,
+    transcriber: Transcriber = transcribe_audio,
+    on_progress: Callable[[float, float], None] | None = None,
+    now: Callable[[], str] = _utc_now_iso,
+) -> Document:
+    """Ingest a local audio/video file by transcribing it with whisper."""
+    if not path.exists():
+        raise InvalidSourceError(
+            f"File not found: {path}",
+            hint="Check the path, or pass a YouTube URL.",
+        )
+    if path.suffix.lower() not in _AUDIO_EXTENSIONS:
+        raise InvalidSourceError(
+            f"Unsupported file type: {path.suffix or '(none)'}",
+            hint=f"Supported audio/video extensions: {', '.join(sorted(_AUDIO_EXTENSIONS))}",
+        )
+    result = transcriber(path, model_size=model_size, language=language, on_progress=on_progress)
+    meta = SourceMetadata(
+        title=path.stem,
+        source=str(path),
+        channel="Local file",
+        duration_s=result.duration_s,
+        video_id=path.stem,
+    )
+    return assemble_document(
+        meta,
+        result.segments,
+        method=f"whisper-{result.model_size}",
+        language=result.language,
+        ingested_at=now(),
+    )
+
+
+__all__ = [
+    "NoCaptionsError",
+    "assemble_document",
+    "build_document",
+    "ingest_file",
+    "ingest_youtube",
+    "ingest_youtube_transcribe",
+]

@@ -4,8 +4,10 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from hearsay.errors import (
+    AudioDownloadError,
     HearsayError,
     InvalidSourceError,
     MetadataError,
@@ -23,6 +25,7 @@ _URL_PATTERNS = [
 ]
 
 _METADATA_TIMEOUT_S = 60
+_DOWNLOAD_TIMEOUT_S = 600
 
 
 def extract_video_id(url: str) -> str | None:
@@ -105,6 +108,52 @@ def _map_ytdlp_error(url: str, stderr: str) -> HearsayError:
             "If the video plays in a browser, try updating yt-dlp: uv sync --upgrade-package yt-dlp"
         ),
     )
+
+
+def download_audio(url: str, dest_dir: Path) -> Path:
+    """Download the best audio-only stream into ``dest_dir`` and return its path.
+
+    Prefers an m4a stream (no re-encode, no ffmpeg needed); falls back to any
+    best audio (e.g. webm/opus), which faster-whisper decodes directly. The
+    caller owns ``dest_dir`` and is responsible for deleting it.
+    """
+    out_template = str(dest_dir / "%(id)s.%(ext)s")
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "yt_dlp",
+                "-f",
+                "bestaudio[ext=m4a]/bestaudio/best",
+                "--no-playlist",
+                "--no-warnings",
+                "-o",
+                out_template,
+                "--",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_DOWNLOAD_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise AudioDownloadError(
+            f"Timed out downloading audio for {url} after {_DOWNLOAD_TIMEOUT_S}s.",
+            hint="Check your network connection and try again.",
+        ) from None
+    if proc.returncode != 0:
+        mapped = _map_ytdlp_error(url, proc.stderr)
+        raise AudioDownloadError(mapped.message, hint=mapped.hint) from None
+    files = [p for p in dest_dir.iterdir() if p.is_file()]
+    if not files:
+        raise AudioDownloadError(
+            f"yt-dlp reported success but produced no audio file for {url}.",
+            hint="Try updating yt-dlp: uv sync --upgrade-package yt-dlp",
+        )
+    return files[0]
 
 
 def parse_metadata(raw: dict, source: str) -> SourceMetadata:

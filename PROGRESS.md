@@ -100,10 +100,10 @@ README.md   rStL7niR7gs.md   zjkBMFhNj_g.md
 
 ## PHASE 2 — Ears: whisper fallback + local files
 
-- [ ] `hearsay <file.mp3|.mp4|.wav|.m4a>`: extract audio via ffmpeg if needed → faster-whisper → same markdown pipeline (whisper segments → same grouping function)
-- [ ] `--transcribe` flag to force whisper on YouTube URLs (yt-dlp audio-only download → transcribe); auto-fallback to this path when no captions exist, with a clear "transcribing locally, this takes a few minutes" notice
-- [ ] `--model` flag (default `small`); rich progress bar during transcription; clean temp-file handling (always delete downloaded audio)
-- [ ] Add a short (<30s) public-domain audio clip to `tests/fixtures/`; integration test transcribes it with `tiny`
+- [x] `hearsay <file.mp3|.mp4|.wav|.m4a>`: extract audio (faster-whisper's PyAV decodes directly; no ffmpeg step needed) → faster-whisper → same markdown pipeline — verified: `hearsay tests/fixtures/sample.wav` produces correct markdown (method whisper-small)
+- [x] `--transcribe` flag to force whisper on YouTube URLs (yt-dlp audio-only download → transcribe); auto-fallback when no captions exist, with a "transcribing locally, this takes a few minutes" notice — verified: live `--transcribe --model tiny` on a 19s video; fallback covered by tests
+- [x] `--model` flag (default `small`); rich progress bar during transcription; clean temp-file handling (always delete downloaded audio) — verified: `--model` enum validated by Typer; temp dir auto-deleted (test + live check); progress bar driven by whisper callback
+- [x] Add a short (<30s) public-domain audio clip to `tests/fixtures/`; integration test transcribes it with `tiny` — verified: 4.7s OS-TTS WAV; `test_transcribe_sample_with_tiny` passes (offline via cached model + local_files_only)
 - [ ] Document ffmpeg as a requirement with install commands per OS in README
 
 **Acceptance:** `uv run hearsay tests/fixtures/sample.wav` produces correct markdown · captionless YouTube video works end-to-end via fallback.

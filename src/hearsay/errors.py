@@ -36,3 +36,11 @@ class MetadataError(HearsayError):
 
 class OutputWriteError(HearsayError):
     """The rendered markdown could not be written to the output path."""
+
+
+class TranscriptionError(HearsayError):
+    """Local whisper transcription failed (model load or audio decode)."""
+
+
+class AudioDownloadError(HearsayError):
+    """yt-dlp could not download the audio stream for transcription."""
