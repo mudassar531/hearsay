@@ -49,7 +49,7 @@ Success: no issues found in 3 source files
 - [x] Chapter-aware sectioning: chapters → `##` headings; no chapters → time-based sections every ~5 minutes — verified: 8 sectioning tests pass against the real chapter fixture and synthetic time-window cases
 - [x] Markdown renderer producing exactly the OUTPUT FORMAT in SPEC.md; `-o/--output` flag, default `./<video-id>.md` — verified: render tests pass; pipeline+CLI wired; `hearsay <url>` and `-o` produce correct files (see examples/)
 - [x] Friendly errors: no captions ("transcription lands in Phase 2"), private/unavailable/invalid URL — verified: 12 error tests pass; live invalid URL & nonexistent video render a hint + exit 1 with no traceback
-- [ ] Fixtures: record 2 real transcript+metadata payloads (one video with chapters, one without) into `tests/fixtures/`; unit-test grouping, sectioning, rendering against them
+- [x] Fixtures: record 2 real transcript+metadata payloads (one video with chapters, one without) into `tests/fixtures/`; unit-test grouping, sectioning, rendering against them — verified: fixtures committed; grouping/sectioning tests run on them; full-chain fixture→render test added
 - [ ] Run end-to-end on 2 real videos; commit outputs to `examples/`
 
 **Acceptance:** `uv run hearsay https://www.youtube.com/watch?v=<id>` produces a clean file in <10s · tests pass offline · `examples/` contains 2 real outputs.

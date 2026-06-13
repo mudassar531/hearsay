@@ -6,6 +6,7 @@ from pathlib import Path
 from hearsay.captions import CaptionResult, normalize_snippets
 from hearsay.models import Document
 from hearsay.pipeline import build_document, ingest_youtube
+from hearsay.render import render_markdown
 from hearsay.youtube import parse_metadata
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -73,3 +74,25 @@ def test_ingest_youtube_with_injected_fetchers() -> None:
     assert captured["language"] == "en"
     assert doc.ingested_at == "2026-06-13T10:00:00Z"
     assert doc.meta.title == "You Would Be a Terrible Leader"
+
+
+def test_render_full_chain_from_chapter_fixture() -> None:
+    # Rendering, exercised against real fixture data end to end.
+    meta = parse_metadata(load_meta("zjkBMFhNj_g"), "https://www.youtube.com/watch?v=zjkBMFhNj_g")
+    doc = build_document(meta, load_captions("zjkBMFhNj_g"), ingested_at="2026-06-13T10:00:00Z")
+    markdown = render_markdown(doc)
+
+    lines = markdown.splitlines()
+    assert lines[0] == "---"
+    assert 'title: "[1hr Talk] Intro to Large Language Models"' in lines
+    assert 'method: "captions-auto"' in lines
+    assert "# [1hr Talk] Intro to Large Language Models" in lines
+    # Every chapter that received paragraphs renders as a `##` heading.
+    heading_count = sum(1 for line in lines if line.startswith("## "))
+    assert heading_count == len(doc.sections)
+    # Each paragraph carries a bold HH:MM:SS timestamp marker.
+    assert markdown.count("**[") == sum(len(s.paragraphs) for s in doc.sections)
+    # Lossless: the body words equal the source caption words.
+    body = markdown.split("\n---\n", 1)[-1]
+    body_words = [w for w in body.split() if not w.startswith(("#", "**[", "[")) and ":" not in w]
+    assert "language" in body_words and "models" in body_words
