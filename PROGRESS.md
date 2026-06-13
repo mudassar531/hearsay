@@ -54,6 +54,50 @@ Success: no issues found in 3 source files
 
 **Acceptance:** `uv run hearsay https://www.youtube.com/watch?v=<id>` produces a clean file in <10s · tests pass offline · `examples/` contains 2 real outputs.
 
+### Phase 1 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15). An independent 5-lens gate
+review (acceptance, spec, core code, I/O code, offline guarantee) verified the
+phase; its one confirmed blocker (file-write traceback) and several minors were
+fixed before this evidence run — see DECISIONS.md. Tests run offline by
+construction (fixtures + injected fetchers) and a `tests/conftest.py` now blocks
+non-loopback network to enforce it.
+
+```text
+$ uv run pytest
+........................................................................ [ 77%]
+.....................                                                    [100%]
+93 passed in 0.39s
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy
+Success: no issues found in 20 source files
+
+$ time uv run hearsay https://www.youtube.com/watch?v=rStL7niR7gs -o /tmp/p1.md
+╭─────────────────── hearsay ───────────────────╮
+│ ✓ You Would Be a Terrible Leader              │
+│ 4 sections · 37 paragraphs · method: captions │
+│ → /tmp/p1.md                                  │
+╰───────────────────────────────────────────────╯
+real 3.29   (well under the 10s budget)
+
+$ head -8 /tmp/p1.md
+---
+title: "You Would Be a Terrible Leader"
+source: "https://www.youtube.com/watch?v=rStL7niR7gs"
+channel: "CGP Grey"
+duration: "00:18:13"
+ingested: "2026-06-13T02:43:06Z"
+method: "captions"
+language: "en"
+---
+
+$ ls examples/
+README.md   rStL7niR7gs.md   zjkBMFhNj_g.md
+```
+
 ## PHASE 2 — Ears: whisper fallback + local files
 
 - [ ] `hearsay <file.mp3|.mp4|.wav|.m4a>`: extract audio via ffmpeg if needed → faster-whisper → same markdown pipeline (whisper segments → same grouping function)
