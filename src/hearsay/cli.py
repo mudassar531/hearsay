@@ -72,11 +72,17 @@ class DefaultCommandGroup(TyperGroup):
     """
 
     default_command = "ingest"
+    # Options handled by the group itself (not by the default command).
+    _group_options = frozenset({"--version", "--help", "-h"})
 
-    def resolve_command(self, ctx, args):
-        if args and not args[0].startswith("-") and args[0] not in self.commands:
+    def parse_args(self, ctx, args):
+        # Prepend `ingest` unless the first token is a known subcommand or a
+        # group-level option, so both `hearsay <SOURCE> [options]` and
+        # `hearsay [options] <SOURCE>` reach ingestion, while `hearsay mcp`,
+        # `hearsay --version`, and `hearsay --help` still work.
+        if args and args[0] not in self.commands and args[0] not in self._group_options:
             args = [self.default_command, *args]
-        return super().resolve_command(ctx, args)
+        return super().parse_args(ctx, args)
 
 
 app = typer.Typer(

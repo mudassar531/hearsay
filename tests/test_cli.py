@@ -49,6 +49,37 @@ def test_console_script_points_at_cli_app() -> None:
     assert script.load() is app
 
 
+# --- Command-group routing (DefaultCommandGroup) --------------------------
+
+
+def test_mcp_subcommand_is_registered() -> None:
+    result = runner.invoke(app, ["mcp", "--help"])
+    assert result.exit_code == 0
+    assert "server" in result.output.lower()
+
+
+def test_options_before_source_route_to_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `hearsay -o X <source>` (options before the positional) must still work.
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    dest = tmp_path / "o.md"
+    result = runner.invoke(app, ["-o", str(dest), "https://youtu.be/rStL7niR7gs"])
+    assert result.exit_code == 0, result.output
+    assert dest.exists()
+
+
+def test_unknown_bare_token_is_treated_as_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A bare token that isn't a subcommand routes to ingest (as a source path).
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["notacommand"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "not found" in result.output.lower()
+
+
 # --- Ingest command (offline via a patched pipeline) ----------------------
 
 
