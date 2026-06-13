@@ -26,5 +26,9 @@ class NoCaptionsError(HearsayError):
     """The video has no captions in any language."""
 
 
+class CaptionsError(HearsayError):
+    """Captions exist but could not be retrieved (e.g. blocked network)."""
+
+
 class MetadataError(HearsayError):
     """yt-dlp could not fetch or parse video metadata."""
