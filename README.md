@@ -4,6 +4,7 @@
 > episode, or local recording into clean, timestamped, chunked, LLM-ready
 > markdown — for RAG pipelines and AI agents.
 
+[![PyPI](https://img.shields.io/pypi/v/hearsay)](https://pypi.org/project/hearsay/)
 [![CI](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml/badge.svg)](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -29,17 +30,18 @@ pipx install hearsay
 uv tool install "hearsay[mcp]"
 ```
 
-> **Pre-release:** hearsay isn't on PyPI yet. Until the first release, install
-> from a checkout:
->
-> ```bash
-> git clone https://github.com/mudassar531/hearsay
-> cd hearsay
-> uv tool install .               # puts `hearsay` on your PATH
-> # or, for development:  uv sync && uv run hearsay --help
-> ```
-
 **System requirement:** [ffmpeg](#requirements) on your PATH.
+
+<details>
+<summary>From source (for development)</summary>
+
+```bash
+git clone https://github.com/mudassar531/hearsay
+cd hearsay
+uv sync && uv run hearsay --help    # or: uv tool install .
+```
+
+</details>
 
 ## 30-second quickstart
 
