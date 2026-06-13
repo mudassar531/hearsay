@@ -1,7 +1,7 @@
 # Show HN launch draft
 
-Plain, honest, demo-first. No hype words ("revolutionary", "blazingly fast",
-"game-changing"). Lead with what it does and a link to the gif.
+Plain, honest, demo-first. No marketing superlatives — lead with what it does
+and a link to the gif, and let the output speak for itself.
 
 ---
 

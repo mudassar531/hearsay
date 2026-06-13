@@ -1,10 +1,11 @@
 """Command-line interface for hearsay.
 
-A single Typer command. SOURCE may be a YouTube video URL, a YouTube playlist
-URL, a podcast RSS feed, or a local audio/video file. Single sources write one
+A Typer command group with a default command (``ingest``), so
+``hearsay <SOURCE> [options]`` works without typing ``ingest`` while
+``hearsay mcp`` runs the MCP server. SOURCE may be a YouTube video/playlist URL,
+a podcast RSS feed, or a local audio/video file. Single sources write one
 markdown file; batch sources (playlists/feeds) list their items, or ingest a
-selection into an output directory. A single command keeps option order natural;
-the ``mcp`` subcommand planned for Phase 4 will convert this into a group.
+selection into an output directory.
 """
 
 from collections.abc import Callable, Iterator

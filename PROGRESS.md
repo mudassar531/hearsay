@@ -280,6 +280,48 @@ Claude Code / Claude Desktop docs.
 
 **Acceptance:** fresh-clone test — `git clone` → install → ingest a URL works following only the README · CI green · demo gif renders.
 
+### Phase 5 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15). An independent 5-lens gate
+review (fresh-clone, README/docs, CI/build, launch copy, full-project
+completeness) passed fresh-clone/README/CI-build/launch; the one flagged item
+(this missing evidence block) was the phase-gate step itself and was downgraded
+to minor — now added. Its surfaced nits (stale cli docstring, hype words quoted
+in the show-hn editorial note, implicit CI ffmpeg) were fixed.
+
+```text
+$ uv run pytest
+158 passed in 3.43s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!
+32 files already formatted
+Success: no issues found in 30 source files
+
+$ uv build
+Successfully built dist/hearsay-0.1.0.tar.gz
+Successfully built dist/hearsay-0.1.0-py3-none-any.whl
+
+$ file demo/demo.gif
+demo/demo.gif: GIF image data, version 89a, 1100 x 720
+```
+
+**CI:** GitHub Actions `CI` workflow conclusion `success` on Python 3.11 and 3.12
+(ruff + ruff format + mypy + pytest) — re-run on the final commit.
+
+**Fresh-clone acceptance** (verified by the gate review from a clean checkout,
+following only the README's from-source block):
+
+```text
+$ git clone <repo> /tmp/fc && cd /tmp/fc      # clean: no .venv/dist
+$ uv tool install .                            # README path A → installs `hearsay`
+$ hearsay --version                            # hearsay 0.1.0
+$ uv sync && uv run hearsay --version          # README path B (dev)  → hearsay 0.1.0
+$ uv run hearsay "https://www.youtube.com/watch?v=rStL7niR7gs" -o out.md
+  ✓ You Would Be a Terrible Leader · 4 sections · 37 paragraphs · method: captions
+# out.md: valid YAML frontmatter + "# " heading + "**[00:00:00]**" markers
+```
+
 ## PHASE 6 — Stretch (DO NOT START without explicit approval)
 
 Parked in `IDEAS.md`: speaker diarization via whisperX · `--frames` keyframe extraction · vector-store export helpers · web URL article fallback.
