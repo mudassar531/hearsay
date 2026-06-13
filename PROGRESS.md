@@ -13,7 +13,7 @@ Rule: a box is ticked only after its verification command ran and passed. One co
 
 - [x] Check name availability on PyPI; if taken, propose 5 alternatives, pick the best, use it everywhere — `earshot` taken (HTTP 200); picked `hearsay` (HTTP 404 = free); see DECISIONS.md
 - [x] `uv init` with `src/hearsay/` layout; pin Python 3.11+ — verified: `uv run python -c "import hearsay"` OK on Python 3.11.15
-- [ ] Typer CLI skeleton: `hearsay --version`, `hearsay --help` with the one-liner pitch
+- [x] Typer CLI skeleton: `hearsay --version`, `hearsay --help` with the one-liner pitch — verified: `uv run hearsay --version` → `hearsay 0.1.0`; `--help` shows pitch
 - [ ] Configure ruff + mypy + pytest; add one placeholder test
 - [ ] MIT `LICENSE`, stub `README.md` (one-liner + "under construction"), `.gitignore`, `git init` + first commit
 
