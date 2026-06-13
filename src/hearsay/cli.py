@@ -80,9 +80,13 @@ def main(
         ),
     ] = None,
     language: Annotated[
-        str,
-        typer.Option("--lang", help="Preferred caption / transcription language code."),
-    ] = "en",
+        str | None,
+        typer.Option(
+            "--lang",
+            help="Language code. Captions default to English; transcription auto-detects.",
+            show_default=False,
+        ),
+    ] = None,
     transcribe: Annotated[
         bool,
         typer.Option(
@@ -122,9 +126,18 @@ def main(
 
 
 def _produce_document(
-    source: str, *, language: str, transcribe: bool, model: str
+    source: str, *, language: str | None, transcribe: bool, model: str
 ) -> tuple[Document, str]:
-    """Route SOURCE to the right ingestion path and return (document, name)."""
+    """Route SOURCE to the right ingestion path and return (document, name).
+
+    An existing local file wins over URL matching, so a path that merely
+    contains a YouTube host substring (e.g. a ``youtu.be/`` folder) is still
+    transcribed rather than handed to yt-dlp.
+    """
+    path = Path(source).expanduser()
+    if path.is_file():
+        return _ingest_file(path, language, model), path.stem
+
     video_id = extract_video_id(source)
     if video_id is not None:
         return _ingest_youtube_source(source, video_id, language, transcribe, model), video_id
@@ -138,27 +151,28 @@ def _produce_document(
             ),
         )
 
-    # Treat anything else as a local file path; ingest_file validates it.
-    path = Path(source).expanduser()
-    lang = None if language == "en" else language
+    # Not a URL and not an existing file: let ingest_file raise a clear error.
+    return _ingest_file(path, language, model), path.stem
+
+
+def _ingest_file(path: Path, language: str | None, model: str) -> Document:
+    """Transcribe a local file, with a progress bar."""
     with _transcription_progress(f"Transcribing {path.name} with whisper '{model}'") as cb:
-        document = ingest_file(path, model_size=model, language=lang, on_progress=cb)
-    return document, path.stem
+        return ingest_file(path, model_size=model, language=language, on_progress=cb)
 
 
 def _ingest_youtube_source(
-    url: str, video_id: str, language: str, transcribe: bool, model: str
+    url: str, video_id: str, language: str | None, transcribe: bool, model: str
 ) -> Document:
     """Captions path, or whisper — forced by --transcribe or auto on no captions."""
-    lang = None if language == "en" else language
     if transcribe:
-        return _transcribe_youtube(url, model, lang, forced=True)
+        return _transcribe_youtube(url, model, language, forced=True)
     try:
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
-            return ingest_youtube(url, language=language)
+            return ingest_youtube(url, language=language or "en")
     except NoCaptionsError:
         console.print("[yellow]No captions found.[/yellow] Falling back to local transcription.")
-        return _transcribe_youtube(url, model, lang, forced=False)
+        return _transcribe_youtube(url, model, language, forced=False)
 
 
 def _transcribe_youtube(url: str, model: str, lang: str | None, *, forced: bool) -> Document:

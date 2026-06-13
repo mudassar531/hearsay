@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hearsay.youtube import extract_video_id, parse_metadata
+from hearsay.youtube import _pick_downloaded_audio, extract_video_id, parse_metadata
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -87,3 +87,17 @@ def test_parse_metadata_missing_id_raises_friendly_error() -> None:
     with pytest.raises(MetadataError) as excinfo:
         parse_metadata({"title": "no id here"}, "https://youtu.be/x")
     assert excinfo.value.hint  # tells the user what to do next
+
+
+def test_pick_downloaded_audio_ignores_sidecars_and_picks_largest(tmp_path: Path) -> None:
+    (tmp_path / "vid.webp").write_bytes(b"thumbnail")
+    (tmp_path / "vid.info.json").write_bytes(b"{}")
+    (tmp_path / "vid.m4a.part").write_bytes(b"partial-download")
+    audio = tmp_path / "vid.m4a"
+    audio.write_bytes(b"the real audio payload is the biggest")
+    assert _pick_downloaded_audio(tmp_path) == audio
+
+
+def test_pick_downloaded_audio_none_when_only_sidecars(tmp_path: Path) -> None:
+    (tmp_path / "vid.webp").write_bytes(b"x")
+    assert _pick_downloaded_audio(tmp_path) is None

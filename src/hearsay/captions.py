@@ -146,5 +146,5 @@ def fetch_captions(video_id: str, language: str) -> CaptionResult:
 def _no_captions_message(video_id: str) -> tuple[str, str]:
     return (
         f"This video has no captions in any language: {video_id}",
-        "Local Whisper transcription lands in Phase 2; until then, pick a captioned video.",
+        "hearsay will transcribe it locally with Whisper; pass --transcribe to do so directly.",
     )

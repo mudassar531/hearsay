@@ -46,7 +46,7 @@ def test_map_ytdlp_error_handles_empty_stderr() -> None:
     assert error.hint
 
 
-def test_no_captions_message_points_to_phase_2() -> None:
+def test_no_captions_message_points_to_transcription() -> None:
     message, hint = _no_captions_message("abcdefghijk")
     assert "no captions" in message.lower()
-    assert "Phase 2" in hint
+    assert "--transcribe" in hint

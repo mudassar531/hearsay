@@ -59,23 +59,31 @@ def transcribe_audio(
         )
 
     model = _load_model(model_size, local_files_only=local_files_only)
+    # whisper's segment iterator is lazy — the actual decode happens as we
+    # consume it, so live progress is reported here. Only this loop can fail on
+    # a bad file; Segment construction is done afterward so a model invariant
+    # slip (e.g. end < start) surfaces honestly, not as a bogus "bad file".
+    raw: list[tuple[str, float, float]] = []
     try:
         segment_iter, info = model.transcribe(str(path), language=language, vad_filter=True)
-        segments: list[Segment] = []
         for seg in segment_iter:
-            text = seg.text.strip()
-            if text:
-                segments.append(Segment(text=text, start_s=max(0.0, seg.start), end_s=seg.end))
+            raw.append((seg.text, seg.start, seg.end))
             if on_progress is not None:
                 on_progress(min(seg.end, info.duration), info.duration)
-    except TranscriptionError:
-        raise
     except Exception as exc:
         raise TranscriptionError(
             f"Could not transcribe {path}: {exc}",
             hint="Check the file is a valid audio/video file and ffmpeg is installed.",
         ) from exc
 
+    segments: list[Segment] = []
+    for text, start, end in raw:
+        text = text.strip()
+        if not text:
+            continue
+        start_s = max(0.0, start)
+        end_s = max(end, start_s)  # whisper occasionally yields end < start
+        segments.append(Segment(text=text, start_s=start_s, end_s=end_s))
     if on_progress is not None:
         on_progress(info.duration, info.duration)
     return TranscriptionResult(

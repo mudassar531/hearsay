@@ -214,3 +214,28 @@ def test_invalid_model_choice_rejected() -> None:
     result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "--model", "huge"])
     assert result.exit_code == 2  # Typer rejects the bad enum choice
     assert "huge" in result.output
+
+
+def test_existing_file_wins_over_youtube_substring_in_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real file under a "youtu.be" folder must be transcribed, not sent to yt-dlp.
+    weird = tmp_path / "youtu.be" / "abcdefghijk.wav"
+    weird.parent.mkdir()
+    weird.write_bytes(b"x")
+    routed = {"file": False, "youtube": False}
+
+    def fake_file(path, **kwargs):
+        routed["file"] = True
+        return _whisper_doc(path.stem)
+
+    def fake_youtube(*a, **k):
+        routed["youtube"] = True
+        return _fixture_document("rStL7niR7gs")
+
+    monkeypatch.setattr(cli, "ingest_file", fake_file)
+    monkeypatch.setattr(cli, "ingest_youtube", fake_youtube)
+    result = runner.invoke(app, [str(weird), "-o", str(tmp_path / "o.md")])
+    assert result.exit_code == 0, result.output
+    assert routed["file"] is True
+    assert routed["youtube"] is False

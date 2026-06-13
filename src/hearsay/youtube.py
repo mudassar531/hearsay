@@ -147,13 +147,32 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     if proc.returncode != 0:
         mapped = _map_ytdlp_error(url, proc.stderr)
         raise AudioDownloadError(mapped.message, hint=mapped.hint) from None
-    files = [p for p in dest_dir.iterdir() if p.is_file()]
-    if not files:
+    audio = _pick_downloaded_audio(dest_dir)
+    if audio is None:
         raise AudioDownloadError(
             f"yt-dlp reported success but produced no audio file for {url}.",
             hint="Try updating yt-dlp: uv sync --upgrade-package yt-dlp",
         )
-    return files[0]
+    return audio
+
+
+# Partial/sidecar files yt-dlp may leave next to the real media.
+_NON_AUDIO_SUFFIXES = {".part", ".ytdl", ".json", ".jpg", ".jpeg", ".png", ".webp", ".vtt", ".srt"}
+
+
+def _pick_downloaded_audio(dest_dir: Path) -> Path | None:
+    """Choose the real media file in ``dest_dir`` (largest non-sidecar file).
+
+    yt-dlp normally writes exactly one file, but a leftover ``.part`` or a
+    sidecar (thumbnail/info/subtitle) can appear; ``iterdir`` order is
+    arbitrary, so we filter known sidecars and pick the largest remaining file.
+    """
+    candidates = [
+        p for p in dest_dir.iterdir() if p.is_file() and p.suffix.lower() not in _NON_AUDIO_SUFFIXES
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_size)
 
 
 def parse_metadata(raw: dict, source: str) -> SourceMetadata:
