@@ -32,3 +32,7 @@ class CaptionsError(HearsayError):
 
 class MetadataError(HearsayError):
     """yt-dlp could not fetch or parse video metadata."""
+
+
+class OutputWriteError(HearsayError):
+    """The rendered markdown could not be written to the output path."""

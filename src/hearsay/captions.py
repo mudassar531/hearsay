@@ -16,8 +16,20 @@ from hearsay.errors import CaptionsError, NoCaptionsError, VideoUnavailableError
 from hearsay.models import Segment
 
 _WHITESPACE = re.compile(r"\s+")
-# Standalone cues like [Music], (applause), [Laughter] carry no transcript text.
-_NOISE_CUE = re.compile(r"[\[(][^\])]{0,40}[\])]")
+# A snippet that is ENTIRELY one bracketed/parenthesized cue, e.g. "[Music]".
+_WRAPPED_CUE = re.compile(r"^[\[(]\s*([^\])]{0,40})\s*[\])]$")
+# Words that mark a wrapped snippet as a non-speech sound annotation. A wrapped
+# cue is dropped if it CONTAINS any of these (so "[ominous music plays]" goes
+# but "[for all your hard work]" and "(I think so)" stay). The set is kept
+# conservative — only words that are almost always sound cues, never ordinary
+# speech — so fully-parenthesized real speech is preserved.
+_NOISE_WORDS = frozenset(
+    """
+    music applause laughter laughs laughing cheering cheers clapping applauding
+    inaudible crosstalk sighs coughing chuckles chuckling gasps groans
+    murmuring beep bleep static
+    """.split()  # noqa: SIM905 - a wrapped word list reads better than a literal
+)
 
 
 class TranscriptInfo(NamedTuple):
@@ -69,12 +81,28 @@ def normalize_snippets(snippets: list[dict]) -> list[Segment]:
     for snippet in snippets:
         text = html.unescape(str(snippet["text"]))
         text = _WHITESPACE.sub(" ", text).strip()
-        if not text or not _NOISE_CUE.sub("", text).strip():
+        if not text or _is_noise_cue(text):
             continue
         start = float(snippet["start"])
         duration = float(snippet.get("duration") or 0.0)
         segments.append(Segment(text=text, start_s=start, end_s=start + duration))
     return segments
+
+
+def _is_noise_cue(text: str) -> bool:
+    """True if ``text`` is a standalone non-speech annotation like ``[Music]``.
+
+    Only a fully wrapped cue whose inner words are all known noise terms (or
+    musical-note symbols) counts, so genuine short parentheticals such as
+    ``(I think so)`` are preserved.
+    """
+    match = _WRAPPED_CUE.match(text)
+    if not match:
+        return False
+    inner = match.group(1).strip().strip("♪♫🎵🎶").strip()
+    if not inner:  # e.g. "[ ]" or a bare "♪♪"
+        return True
+    return any(word.strip(".,!?").lower() in _NOISE_WORDS for word in inner.split())
 
 
 def fetch_captions(video_id: str, language: str) -> CaptionResult:

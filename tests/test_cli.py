@@ -104,3 +104,25 @@ def test_ingest_surfaces_no_captions_hint(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.exit_code == 1
     assert "no captions" in result.output
     assert "Phase 2" in result.output
+
+
+def test_ingest_bad_output_path_is_friendly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A missing parent directory must produce a hint, not a traceback.
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    dest = tmp_path / "missing_dir" / "out.md"
+    result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "-o", str(dest)])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "directory" in result.output.lower()
+
+
+def test_ingest_output_is_directory_is_friendly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "-o", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "directory" in result.output.lower()

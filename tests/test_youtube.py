@@ -40,6 +40,7 @@ def test_extract_video_id(url: str, expected: str) -> None:
         "not a url at all",
         "zjkBMFhNj_g",  # a bare id is not a URL
         "https://youtu.be/tooshort",
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQextra",  # 11+ chars: reject, don't truncate
         "",
     ],
 )
@@ -78,3 +79,11 @@ def test_parse_metadata_fills_safe_defaults() -> None:
     assert meta.channel == "Unknown"
     assert meta.duration_s == 0.0
     assert meta.chapters == []
+
+
+def test_parse_metadata_missing_id_raises_friendly_error() -> None:
+    from hearsay.errors import MetadataError
+
+    with pytest.raises(MetadataError) as excinfo:
+        parse_metadata({"title": "no id here"}, "https://youtu.be/x")
+    assert excinfo.value.hint  # tells the user what to do next

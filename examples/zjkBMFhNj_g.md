@@ -3,7 +3,7 @@ title: "[1hr Talk] Intro to Large Language Models"
 source: "https://www.youtube.com/watch?v=zjkBMFhNj_g"
 channel: "Andrej Karpathy"
 duration: "00:59:48"
-ingested: "2026-06-13T02:27:19Z"
+ingested: "2026-06-13T02:42:34Z"
 method: "captions-auto"
 language: "en"
 ---

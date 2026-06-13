@@ -76,6 +76,25 @@ def test_normalize_drops_noise_cues_and_empties() -> None:
     assert [s.text for s in segments] == ["[Music] but real words too", "plain text"]
 
 
+def test_normalize_preserves_real_parentheticals() -> None:
+    # Short fully-parenthesized speech survives; only cues containing a sound
+    # keyword (music/applause/laughter/...) are dropped — even descriptive ones
+    # like "[ominous music plays]" (real case from the CGP fixture).
+    snippets = [
+        {"text": "(I think so)", "start": 0.0, "duration": 1.0},
+        {"text": "[for all your hard work]", "start": 1.0, "duration": 1.0},
+        {"text": "(that sounds good)", "start": 2.0, "duration": 1.0},
+        {"text": "[ominous music plays]", "start": 3.0, "duration": 1.0},  # noise
+        {"text": "[Laughter]", "start": 4.0, "duration": 1.0},  # noise
+    ]
+    segments = normalize_snippets(snippets)
+    assert [s.text for s in segments] == [
+        "(I think so)",
+        "[for all your hard work]",
+        "(that sounds good)",
+    ]
+
+
 def test_normalize_real_fixtures_yields_clean_ordered_segments() -> None:
     for video_id in ("rStL7niR7gs", "zjkBMFhNj_g"):
         data = json.loads((FIXTURES / f"{video_id}.transcript.json").read_text())

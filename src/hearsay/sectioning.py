@@ -30,7 +30,8 @@ def sectionize(
 
 
 def _span_title(paragraphs: list[Paragraph]) -> str:
-    return f"[{format_timestamp(paragraphs[0].start_s)} – {format_timestamp(paragraphs[-1].end_s)}]"
+    end_s = max(p.end_s for p in paragraphs)  # last by start order may not end last
+    return f"[{format_timestamp(paragraphs[0].start_s)} – {format_timestamp(end_s)}]"
 
 
 def _by_chapters(paragraphs: list[Paragraph], chapters: list[Chapter]) -> list[Section]:

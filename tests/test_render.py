@@ -106,3 +106,44 @@ def test_format_timestamp() -> None:
     assert format_timestamp(3723.9) == "01:02:03"
     assert format_timestamp(86399) == "23:59:59"
     assert format_timestamp(-5) == "00:00:00"
+
+
+def test_format_timestamp_handles_non_finite() -> None:
+    assert format_timestamp(float("nan")) == "00:00:00"
+    assert format_timestamp(float("inf")) == "00:00:00"
+
+
+def test_newline_in_title_cannot_break_frontmatter_or_inject_headings() -> None:
+    doc = make_doc()
+    doc.meta.title = 'Innocent\n---\nsource: "attacker"\n## Fake Section'
+    output = render_markdown(doc)
+    # Frontmatter stays a single title line; the newline is escaped, not raw.
+    front = output.split("\n---\n", 1)[0]
+    assert front.count("\n") == len(front.splitlines()) - 1  # no extra blank fold
+    assert "\\x0a" in output  # newline escaped in the YAML scalar
+    # The H1 heading is a single line; no injected "## Fake Section" structure.
+    body_headings = [ln for ln in output.splitlines() if ln.startswith("## ")]
+    assert body_headings == ["## One"]
+
+
+def test_control_char_in_title_stays_parseable() -> None:
+    doc = make_doc()
+    doc.meta.title = "Bell\x07Char"
+    output = render_markdown(doc)
+    assert "\\x07" in output  # escaped, not emitted raw
+    assert "\x07" not in output
+
+
+def test_newline_in_section_title_does_not_inject_structure() -> None:
+    doc = make_doc(
+        sections=[
+            Section(
+                title="Real\n## Injected\nbody",
+                start_s=0,
+                paragraphs=[Paragraph(text="a", start_s=0, end_s=1)],
+            )
+        ]
+    )
+    output = render_markdown(doc)
+    headings = [ln for ln in output.splitlines() if ln.startswith("## ")]
+    assert headings == ["## Real ## Injected body"]  # collapsed to one heading line

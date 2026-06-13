@@ -13,10 +13,13 @@ from hearsay.errors import (
 )
 from hearsay.models import Chapter, SourceMetadata
 
+# A trailing negative lookahead rejects ids longer than 11 chars (which would
+# otherwise be silently truncated to a different, wrong video).
+_ID = r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
 _URL_PATTERNS = [
-    re.compile(r"(?:youtube\.com|youtube-nocookie\.com)/watch\?(?:[^#\s]*&)?v=([A-Za-z0-9_-]{11})"),
-    re.compile(r"youtu\.be/([A-Za-z0-9_-]{11})"),
-    re.compile(r"(?:youtube\.com|youtube-nocookie\.com)/(?:embed|shorts|live)/([A-Za-z0-9_-]{11})"),
+    re.compile(rf"(?:youtube\.com|youtube-nocookie\.com)/watch\?(?:[^#\s]*&)?v={_ID}"),
+    re.compile(rf"youtu\.be/{_ID}"),
+    re.compile(rf"(?:youtube\.com|youtube-nocookie\.com)/(?:embed|shorts|live)/{_ID}"),
 ]
 
 _METADATA_TIMEOUT_S = 60
@@ -51,6 +54,8 @@ def fetch_raw_metadata(url: str) -> dict:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",  # yt-dlp emits UTF-8 JSON; do not trust the locale
+            errors="replace",
             timeout=_METADATA_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
@@ -104,6 +109,12 @@ def _map_ytdlp_error(url: str, stderr: str) -> HearsayError:
 
 def parse_metadata(raw: dict, source: str) -> SourceMetadata:
     """Build SourceMetadata from a yt-dlp --dump-json payload (pure)."""
+    video_id = raw.get("id")
+    if not video_id:
+        raise MetadataError(
+            f"yt-dlp returned metadata with no video id for {source}.",
+            hint="Try updating yt-dlp: uv sync --upgrade-package yt-dlp",
+        )
     chapters = [
         Chapter(
             title=str(ch.get("title") or "Untitled"),
@@ -117,6 +128,6 @@ def parse_metadata(raw: dict, source: str) -> SourceMetadata:
         source=source,
         channel=str(raw.get("channel") or raw.get("uploader") or "Unknown"),
         duration_s=float(raw.get("duration") or 0.0),
-        video_id=str(raw["id"]),
+        video_id=str(video_id),
         chapters=chapters,
     )

@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from hearsay import __version__
-from hearsay.errors import HearsayError, InvalidSourceError
+from hearsay.errors import HearsayError, InvalidSourceError, OutputWriteError
 from hearsay.pipeline import ingest_youtube
 from hearsay.render import render_markdown
 from hearsay.youtube import extract_video_id
@@ -82,7 +82,7 @@ def main(
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
             document = ingest_youtube(source, language=language)
         destination = output if output is not None else Path(f"./{video_id}.md")
-        destination.write_text(render_markdown(document), encoding="utf-8")
+        _write_output(destination, render_markdown(document))
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow] No file was written.")
         raise typer.Exit(code=130) from None
@@ -101,6 +101,25 @@ def main(
             border_style="green",
         )
     )
+
+
+def _write_output(destination: Path, markdown: str) -> None:
+    """Write markdown to disk, turning filesystem errors into friendly ones."""
+    try:
+        destination.write_text(markdown, encoding="utf-8")
+    except IsADirectoryError as exc:
+        raise OutputWriteError(
+            f"The output path is a directory, not a file: {destination}",
+            hint="Pass a file path to -o/--output, e.g. -o transcript.md",
+        ) from exc
+    except OSError as exc:
+        raise OutputWriteError(
+            f"Could not write to {destination}: {exc.strerror or exc}",
+            hint=(
+                "Check that the parent directory exists and is writable, "
+                "then try again (hearsay does not create missing folders)."
+            ),
+        ) from exc
 
 
 def _print_error(exc: HearsayError) -> None:

@@ -3,7 +3,7 @@ title: "You Would Be a Terrible Leader"
 source: "https://www.youtube.com/watch?v=rStL7niR7gs"
 channel: "CGP Grey"
 duration: "00:18:13"
-ingested: "2026-06-13T02:27:15Z"
+ingested: "2026-06-13T02:42:30Z"
 method: "captions"
 language: "en"
 ---
@@ -42,21 +42,22 @@ needs few key supporters, to those where the ruler needs many. This foundation
 of power is why countries are different. Yet many keys, or few, the rules are
 the same. First, get the key supporters on your side. With them, you have the
 power to act. You have everything. Without them, you have nothing. Now, in order
-to keep those keys to power, you must, second, control the treasure. You must
-make sure your treasure is raised and distributed to you,
+to keep those keys to power, you must, second, control the treasure.
 
-**[00:02:17]** and to the keys needed to keep your position. This is your true
-work as a ruler, figuring out how best to raise and distribute resources, so as
-not to topple the house of cards upon which your throne sits. Now you, aspiring
-benevolent dictator, may want to help your citizens, but your control of the
-treasure is what attracts rivals, so you must keep those keys loyal. But there’s
-only so much treasure in your vaults, so much wealth your kingdom produces.
+**[00:02:13]** You must make sure your treasure is raised and distributed to
+you, [for all your hard work] and to the keys needed to keep your position. This
+is your true work as a ruler, figuring out how best to raise and distribute
+resources, so as not to topple the house of cards upon which your throne sits.
+Now you, aspiring benevolent dictator, may want to help your citizens, but your
+control of the treasure is what attracts rivals, so you must keep those keys
+loyal.
 
-**[00:02:48]** So beware. Every bit of treasure spent on citizens is treasure
-not spent on loyalty. Thus, doing the right thing, spending the wealth of the
-nation on the citizens of the nation, hands a tool of power acquisition to your
-rivals. Treasure poured into roads, and universities, and hospitals, is treasure
-a rival can promise to key supporters if only they switch sides.
+**[00:02:43]** But there’s only so much treasure in your vaults, so much wealth
+your kingdom produces. So beware. Every bit of treasure spent on citizens is
+treasure not spent on loyalty. Thus, doing the right thing, spending the wealth
+of the nation on the citizens of the nation, hands a tool of power acquisition
+to your rivals. Treasure poured into roads, and universities, and hospitals, is
+treasure a rival can promise to key supporters if only they switch sides.
 
 **[00:03:12]** Benevolent dictators can spend their take on the citizens, but
 the keys must get their rewards, for even if you have gathered the most loyal,
