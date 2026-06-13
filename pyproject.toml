@@ -35,6 +35,10 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
+# These characters are intentional typography: the en dash appears in
+# time-span section titles, and the curly quotes are matched literally in
+# the grouping module's punctuation regexes (transcripts contain them).
+allowed-confusables = ["–", "“", "”", "‘", "’"]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings

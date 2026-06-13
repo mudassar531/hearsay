@@ -45,7 +45,7 @@ Success: no issues found in 3 source files
 
 - [x] `hearsay <youtube-url>`: fetch metadata via `yt-dlp --dump-json` (title, channel, duration, chapters) — no media download — verified: 22 tests pass offline; live fetch returns correct title/channel/duration/chapters
 - [x] Fetch captions via youtube-transcript-api (prefer manual subs over auto-generated; `--lang` flag wiring lands with the CLI task; default `en` with fallback to first available) — verified: 31 tests pass offline; live fetch selects manual `en` for rStL7niR7gs
-- [ ] Implement the paragraph-grouping algorithm (pause threshold + sentence boundaries + 40–120 word targets) as a pure, heavily-tested function
+- [x] Implement the paragraph-grouping algorithm (pause threshold + sentence boundaries + 40–120 word targets) as a pure, heavily-tested function — verified: 67 tests pass; lossless + 100% word-budget on both real fixtures; chosen via judge panel (see DECISIONS.md)
 - [ ] Chapter-aware sectioning: chapters → `##` headings; no chapters → time-based sections every ~5 minutes
 - [ ] Markdown renderer producing exactly the OUTPUT FORMAT in SPEC.md; `-o/--output` flag, default `./<video-id>.md`
 - [ ] Friendly errors: no captions ("transcription lands in Phase 2"), private/unavailable/invalid URL
