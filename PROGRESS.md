@@ -234,6 +234,41 @@ the batch did not abort.
 
 **Acceptance:** MCP round-trip test passes · config snippet verified syntactically.
 
+### Phase 4 Evidence
+
+Run on 2026-06-13 (macOS, uv 0.11.17, Python 3.11.15). An independent 5-lens gate
+review (acceptance, spec, MCP protocol, CLI-group regression, offline) passed all
+five lenses with zero blockers; the one surfaced minor (options-before-source
+regression) was fixed — see DECISIONS.md.
+
+```text
+$ uv run pytest
+158 passed in 3.28s
+
+$ uv run pytest tests/test_mcp.py -v
+tests/test_mcp.py ......                                                 [100%]
+6 passed in 1.78s
+  (incl. test_mcp_stdio_roundtrip — spawns `python -m hearsay mcp`, calls
+   ingest_file on the fixture over stdio, asserts markdown comes back)
+
+$ uv run ruff check . && uv run mypy
+All checks passed!
+Success: no issues found in 30 source files
+
+$ uv run hearsay --help        # lists both subcommands
+Commands:
+  mcp     Run the MCP stdio server (give your AI agent ears).
+  ingest  crawl4ai for video & audio — turn any YouTube video, podcast episode...
+
+$ uv run hearsay --version
+hearsay 0.1.0
+```
+
+Config snippets: both README `json` blocks parse via `json.loads` (Claude Code
+`.mcp.json` and Claude Desktop `claude_desktop_config.json`, each `type: stdio`);
+the `claude mcp add` syntax and config filenames were confirmed against current
+Claude Code / Claude Desktop docs.
+
 ## PHASE 5 — Launch kit
 
 - [ ] Real README: hero one-liner, install (`uv tool install` / `pipx`), 30-second quickstart, output example, comparison table, badges
