@@ -4,7 +4,7 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.2.0 — unreleased
+## 0.3.0 — 2026-06-15
 
 ### What's new: dataset export mode
 
@@ -53,7 +53,7 @@ pipelines read directly. The markdown/JSON engine is unchanged.
 
 - `transcribe` can now emit word-level timestamps (`word_timestamps`), exposed as
   `TranscriptionResult.words`.
-- Packaging metadata bumped to 0.2.0; keywords gained tts/stt/dataset/training-data.
+- Packaging metadata bumped to 0.3.0; keywords gained tts/stt/dataset/training-data.
 
 ### Notes
 
@@ -63,6 +63,13 @@ pipelines read directly. The markdown/JSON engine is unchanged.
 - Word boundaries from Whisper/Parakeet are good but not phonetically exact, and
   **you are responsible** for the rights to any media you process and for voice
   consent — see each generated `dataset_card.md`.
+
+## 0.2.0 — 2026-06-14
+
+Maintenance/modernization release of the 0.1.0 markdown engine — packaging refresh
+and internal preparation (including word-level timestamp plumbing in `transcribe`).
+No user-facing feature changes over 0.1.0; the dataset export mode landed afterward
+and ships in 0.3.0.
 
 ## 0.1.0 — 2026-06-13
 
