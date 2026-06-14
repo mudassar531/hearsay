@@ -126,3 +126,61 @@ Plus, when `--json` is passed, a sidecar `.json` matching a pydantic `Transcript
 ## PHASE 6 — Stretch (DO NOT START without explicit approval)
 
 Speaker diarization via whisperX · `--frames` keyframe extraction · vector-store export helpers · web URL article fallback. Park all of these in `IDEAS.md`.
+
+---
+
+# v0.2 — Dataset Export Mode (TTS/STT)
+
+*Appended 2026-06-14. The PHASE 0–6 spec above is the v0.1 source of truth and remains unchanged. This section adds a second, additive output mode. Full design + citations: `docs/dataset-mode-design.md`. Operating rules below mirror the original; deviations still go to `DECISIONS.md`.*
+
+## THE GOAL
+
+Today hearsay turns media into **readable** markdown (40–120 word paragraphs) for RAG and humans. v0.2 adds a separate output mode that turns media into **machine-learning training datasets** for **TTS and STT**: a user points hearsay at a YouTube video, a whole playlist/channel, a podcast feed, or local files and gets a clean, standard, ready-to-train dataset —
+
+- the **audio sliced into short segments** (~1–15 s, cut on sentence/pause boundaries, **never mid-word**),
+- each segment paired with its **exact verbatim transcript** and **precise timestamps**,
+- saved in a **standard layout** (audio-clip folder + manifest files) that real TTS/STT training pipelines read directly,
+- with **quality filtering** that drops junk (music, silence, overlapping speech, wrong language, too short/long).
+
+This does **not** replace or break the markdown/JSON output — it is a new mode, surfaced in **both** the CLI and the web UI.
+
+## CHOSEN FORMATS (the two defaults, over one shared `wavs/` tree)
+
+- **TTS — LJSpeech-style** `metadata.csv` (pipe-delimited, no header) + `wavs/` of mono 16-bit PCM WAV @ 22050 Hz. Emit **`id|text|text`** (verbatim transcript duplicated) so it loads in **both** Coqui (reads col 3) and Piper (reads last col) without a multi-speaker misparse.
+- **STT — NeMo-style** `manifest.jsonl`: one object per line `{"audio_filepath","duration"(sec float),"text","offset":0.0}`, `audio_filepath` relative to the manifest.
+- Optional third target `--format hf`: HuggingFace `audiofolder` `metadata.csv` (`file_name,transcription`).
+- `--sample-rate` default 22050 (TTS-canonical); 16000 mono documented for ASR.
+
+## ALIGNMENT APPROACH
+
+Caption timestamps are cue-level and loose (no word timing) — **not** usable for clip-accurate slicing. Default word source: **faster-whisper `word_timestamps=True`** (already core, MIT, no new deps); on Apple Silicon, merge Parakeet token timings (split on the literal leading-space marker). One engine-agnostic `Word` adapter normalizes field-name differences. Boundaries are coarse (~100–400 ms jitter, occasional inverted spans), so the slicer repairs inverted spans, snaps to inter-word silence, and pads edges (~100 ms). Better-but-optional: forced alignment via `hearsay[align]` (WhisperX/torchaudio MMS_FA) — heavy (torch), and with a model-license guardrail (many default alignment models are CC-BY-NC).
+
+## NEW DEPENDENCIES (keep core light)
+
+Core gains **nothing** — numpy, PyAV (`av`), and `onnxruntime` are already transitive via faster-whisper; ffmpeg/ffprobe are an existing system requirement. New optional extras only: `hearsay[dataset]` (light: `soundfile`, `webrtcvad-wheels`; may prove unnecessary), `hearsay[align]` (torch), `hearsay[diarize]` (`pyannote.audio`, torch, HF-gated models). Each justified in `DECISIONS.md`.
+
+## DEFAULT BEHAVIOR ON THE SPEAKER PROBLEM
+
+Without diarization (default): emit a **mixed-speaker** dataset (fine for STT) and **warn** it is unsuitable for single-voice TTS. With `hearsay[diarize]` + an HF token: `--per-speaker` or `--dominant-speaker` export. pyannote models are gated (accept conditions on both `segmentation-3.0` and the diarization pipeline + read token); hearsay reads `HF_TOKEN`/`--hf-token` and prints exact remediation on auth failure.
+
+## SCOPE BOUNDARY (explicitly OUT)
+
+No model **training** (we produce datasets, not models) · no cloud upload / hosting / dataset redistribution (local files only) · no new heavy **core** dependency · **no change to the markdown/JSON engine** · no heavier GUI framework (web UI reuses the stdlib server).
+
+## LEGAL / ETHICS
+
+hearsay is a local, user-side tool: it does not host, redistribute, or download on the user's behalf, and ships no datasets. The **user is responsible** for rights to the media and for voice consent (YouTube ToS, copyright, GDPR/biometric law, Illinois BIPA, Tennessee ELVIS Act, EU AI Act Art. 50 synthetic-media transparency from Aug 2 2026). An honest note goes in the README and every generated `dataset_card.md`. Informational, not legal advice.
+
+## DELIVERY (a new `hearsay dataset <SOURCE>` subcommand)
+
+A subcommand, not a `--dataset` flag on `ingest` (distinct large option surface + folder-tree output; keeps `ingest` pristine; reuses shared plumbing). Web UI gains a "Dataset mode" path with a zip download and a CLI hint for big playlists.
+
+## PHASES (gates identical to v0.1: full suite + acceptance → paste evidence → commit → STOP)
+
+- **Phase D1 — Core segmentation engine.** Pure, tested `Word` adapter + segmentation: words → dataset segments (sentence/pause cuts, min/max clamp, never mid-word, repair inverted spans, verbatim text + exact times). No audio cutting yet. Heavy boundary-case unit tests.
+- **Phase D2 — Audio export + manifest.** ffmpeg slicing (mono, sample rate), LJSpeech `metadata.csv` **and** JSONL manifest **and** `dataset_card.md`. Acceptance: one short real video → a loadable dataset; verify clip count, audio↔text alignment, durations.
+- **Phase D3 — Quality filtering.** Tier-1 filters (duration, silence, ASR confidence, language match, text sanity) + structured per-clip drop log + kept/dropped summary. Tests on deliberately bad fixtures.
+- **Phase D4 — Scale.** Playlists / channels / feeds → one merged dataset with a shared manifest, continue-past-failure, totals (clips, hours), progress, resumable if feasible. Acceptance: a small real playlist → one coherent dataset.
+- **Phase D5 — Optional diarization.** `hearsay[diarize]`: per-speaker / dominant-speaker export; clean degrade when absent; explicit HF-token remediation.
+- **Phase D6 — Both front ends + docs.** CLI flags wired; web-UI "Dataset mode" with zip download + CLI hint; README "Build training datasets" section + comparison table/topics updated.
+- **Phase D7 — Launch-ready polish.** Fresh README-only run; CI green; tiny license-clean example mini-dataset committed; "what's new in v0.2" note; final summary.

@@ -326,6 +326,79 @@ $ uv run hearsay "https://www.youtube.com/watch?v=rStL7niR7gs" -o out.md
 
 Parked in `IDEAS.md`: speaker diarization via whisperX · `--frames` keyframe extraction · vector-store export helpers · web URL article fallback.
 
+---
+
+# v0.2 — Dataset Export Mode (TTS/STT)
+
+New, additive mode (`hearsay dataset <SOURCE>`). Design + citations: `docs/dataset-mode-design.md`. Same rules: a box is ticked only after its verification command ran and passed; one commit per task; phase gates paste real evidence then STOP.
+
+## STEP ZERO (Dataset mode)
+
+- [x] Research target formats, alignment, audio cutting, quality filters, diarization, deps/licenses, legality (web-grounded + adversarially verified) — verified: 7-dimension research workflow completed, findings folded into the design memo
+- [x] Write `docs/dataset-mode-design.md` (feasibility & design memo) — verified: file present
+- [x] Append "v0.2 — Dataset Export Mode (TTS/STT)" to `SPEC.md`, keeping all v0.1 content intact — verified: section appended below PHASE 6
+- [x] Add v0.2 phases to `PROGRESS.md` and log key decisions in `DECISIONS.md`; move diarization + vector-store/export helpers out of `IDEAS.md` into this plan — verified: this section; DECISIONS entry added; IDEAS.md updated
+- [x] Design approved by the user (2026-06-14, "approved ultracode") — Phase D1 started
+
+## PHASE D1 — Core segmentation engine (the heart)
+
+- [ ] Engine-agnostic `Word` model + adapters: faster-whisper `Word(word,start,end,probability)` and merged Parakeet tokens (split on literal leading space)
+- [ ] Add opt-in `word_timestamps` capture to `transcribe.py` (default off → existing behavior, JSON schema, and markdown output all unchanged)
+- [ ] Pure `dataset/segmentation.py`: words → `DatasetSegment`s — cut on sentence/pause boundaries, clamp to `[--segment-min, --segment-max]`, never split mid-word, repair inverted spans, attach exact start/end + verbatim text
+- [ ] Heavy unit tests on fixtures: long sentences, no punctuation, tiny gaps, inverted (`start>end`) spans, one-huge-segment, empty input
+
+**Acceptance:** segmentation tests pass offline; segments are lossless w.r.t. input words, never cut mid-word, all within `[min,max]` (or flagged when a single word exceeds max). **STOP.**
+
+## PHASE D2 — Audio export + manifest
+
+- [ ] `dataset/audio.py`: ffmpeg slice (input-seek `-ss START -i -t DUR`, re-encode, `-ac 1`, `-ar SR`, `pcm_s16le`); ffprobe; verify ffmpeg has needed filters
+- [ ] `dataset/formats.py`: LJSpeech `metadata.csv` (`id|text|text`) **and** NeMo `manifest.jsonl` **and** `dataset_card.md` (provenance, counts, total duration, language, rights/consent note); optional HF `audiofolder`
+- [ ] `dataset/build.py`: orchestrate one source → dataset folder; clip naming `<source_id>_<index4>.wav`
+- [ ] Tests: manifest/csv shape + schema; audio↔text↔duration alignment on the tiny fixture clip
+
+**Acceptance:** run on one short real video → a folder a TTS/STT pipeline could load; clip count correct, audio+text line up, durations right. **STOP.**
+
+## PHASE D3 — Quality filtering
+
+- [ ] Tier-1 filters (default on, no heavy deps): duration `[1,15]s`, edge/internal silence, ASR confidence (`avg_logprob<-1.0` / `no_speech_prob>0.6` / `compression_ratio>2.4`), language match (`!=target & prob>=0.5`, min-duration gated), text sanity (empty / chars-per-sec ~5–25 per-language / non-target script)
+- [ ] Structured per-clip drop log (`dropped.jsonl`: clip, filter, value, threshold) + kept/dropped summary by reason; thresholds config-overridable
+- [ ] Optional Tier-2 (off by default): Silero VAD via already-present `onnxruntime` / `webrtcvad-wheels`; SNR; clipping
+- [ ] Tests on fixtures with deliberately bad segments (too short/long, silent, wrong-language, garbage text)
+
+**Acceptance:** filters drop the bad fixtures with correct logged reasons; summary prints kept/dropped counts. **STOP.**
+
+## PHASE D4 — Scale: playlists / channels / feeds → one merged dataset
+
+- [ ] Batch every item through D1–D3 into a **single combined dataset** with a shared manifest, continuing past per-item failures
+- [ ] Summary table + totals (clips, hours); progress; resumability if feasible (skip already-built clips by source_id+index)
+- [ ] Tests: multi-item merge, continue-past-failure, totals
+
+**Acceptance:** a small real playlist → one coherent dataset folder with merged manifest + totals. **STOP.**
+
+## PHASE D5 — Optional diarization (single-speaker TTS)
+
+- [ ] `hearsay[diarize]` extra (pyannote.audio / whisperx, lazy-imported); clean degrade with a clear warning when absent
+- [ ] `--per-speaker` (one sub-dataset/manifest per speaker) and `--dominant-speaker` (keep the most-spoken speaker)
+- [ ] HF token via `HF_TOKEN`/`--hf-token`; on auth failure print exact remediation (accept conditions on both gated repos + create read token)
+- [ ] Tests: mixed-speaker default + degrade path; speaker-label assignment by max temporal overlap (mock/fixture)
+
+**Acceptance:** with the extra, a 2-speaker fixture yields per-speaker (or dominant-only) clips; without it, a clear mixed-speaker warning. **STOP.**
+
+## PHASE D6 — Both front ends + docs
+
+- [ ] CLI flags fully wired: `--out`, `--format`, `--sample-rate`, `--segment-min/max`, `--lang`, `--normalize`, `--diarize`/`--per-speaker`/`--dominant-speaker`, `--vad`, filter toggles
+- [ ] Web UI "Dataset mode": choose dataset output + options, run, download dataset as a zip; hint that big playlists are better via CLI
+- [ ] README "Build training datasets" section (honest accuracy/rights notes, comparison to markdown mode); comparison table + topics updated
+
+**Acceptance:** CLI + web-UI dataset runs both produce a loadable dataset; README path verified. **STOP.**
+
+## PHASE D7 — Launch-ready polish
+
+- [ ] End-to-end fresh-run test following only the README; CI green
+- [ ] Tiny, license-clean example mini-dataset committed so people see the output shape
+- [ ] Draft a short "what's new in v0.2" note
+- [ ] Final summary: what shipped, what's blocked, sample dataset stats, suggested next ideas. **STOP.**
+
 ## Blockers
 
 (none yet)
