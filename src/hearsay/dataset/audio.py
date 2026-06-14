@@ -12,6 +12,8 @@ seeking resets the output timeline to zero.
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,6 +37,34 @@ def ensure_tools() -> None:
             )
 
 
+# EBU R128 loudness target for --normalize: -23 LUFS integrated, -1.5 dBTP true-peak
+# ceiling (conservative; EBU max is -1.0), 7 LU loudness range.
+_LOUDNORM = "loudnorm=I=-23:TP=-1.5:LRA=7"
+_JSON_BLOCK = re.compile(r"\{[^{}]*\}")
+
+
+def ensure_filter(name: str) -> None:
+    """Verify the running ffmpeg build includes filter ``name`` (e.g. for --normalize)."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise AudioExportError(
+            f"Could not query ffmpeg filters: {exc}", hint="Check ffmpeg is healthy."
+        ) from exc
+    if f" {name} " not in proc.stdout:
+        raise AudioExportError(
+            f"Your ffmpeg build lacks the '{name}' filter, needed for --normalize.",
+            hint="Install a full ffmpeg build (the official static builds), or drop --normalize.",
+        )
+
+
 def slice_clip(
     source: Path,
     start_s: float,
@@ -42,11 +72,13 @@ def slice_clip(
     dest: Path,
     *,
     sample_rate: int = 22050,
+    normalize: bool = False,
 ) -> None:
     """Write ``source``'s ``[start_s, end_s]`` as a mono 16-bit PCM WAV at ``sample_rate``.
 
     Re-encodes (lossless for PCM) using input seeking + a duration, so the cut is
-    frame-accurate and the timestamps map directly to the source. Raises
+    frame-accurate and the timestamps map directly to the source. ``normalize`` applies
+    two-pass EBU R128 loudness normalization (``loudnorm``, length-preserving). Raises
     AudioExportError on failure.
     """
     # Clamp the start once and derive the duration from the clamped start, so a
@@ -67,6 +99,10 @@ def slice_clip(
         str(source),
         "-t",
         f"{duration:.3f}",
+    ]
+    if normalize:  # two-pass loudnorm (measure -> linear apply) before the output -ar resamples
+        args += ["-af", _loudnorm_filter(source, start, duration)]
+    args += [
         "-ar",
         str(sample_rate),
         "-ac",
@@ -95,6 +131,59 @@ def slice_clip(
             f"ffmpeg could not slice clip {dest.name}: {tail}",
             hint="Check the source file is valid audio/video and ffmpeg supports it.",
         )
+
+
+def _loudnorm_filter(source: Path, start: float, duration: float) -> str:
+    """Build a loudnorm filter for the segment, two-pass (measure then linear-apply).
+
+    Single-pass dynamic loudnorm buffers/look-aheads and trims ~tens of ms off the
+    clip; the two-pass form (measure on pass 1, ``linear=true`` with the measured
+    values on pass 2) is length-preserving and more accurate. Falls back to plain
+    single-pass only if the measurement can't be parsed.
+    """
+    args = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(source),
+        "-t",
+        f"{duration:.3f}",
+        "-af",
+        f"{_LOUDNORM}:print_format=json",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_SLICE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return _LOUDNORM
+    measured: dict[str, str] = {}
+    for block in _JSON_BLOCK.findall(proc.stderr):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if "input_i" in data:
+            measured = data
+    keys = ("input_i", "input_tp", "input_lra", "input_thresh")
+    if not all(k in measured for k in keys):
+        return _LOUDNORM  # measurement failed — fall back to single-pass
+    i, tp, lra, thresh = (measured[k] for k in keys)
+    return (
+        f"{_LOUDNORM}:measured_I={i}:measured_TP={tp}:measured_LRA={lra}"
+        f":measured_thresh={thresh}:linear=true"
+    )
 
 
 def probe_duration(path: Path) -> float:
@@ -128,3 +217,34 @@ def probe_duration(path: Path) -> float:
         return max(0.0, float(out))
     except ValueError:
         return 0.0
+
+
+def probe_sample_rate(path: Path) -> int:
+    """Return the audio sample rate (Hz) of the first audio stream, or 0 if unknown."""
+    args = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=sample_rate",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return 0
+    try:
+        return max(0, int(proc.stdout.strip()))
+    except ValueError:
+        return 0

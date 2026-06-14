@@ -119,6 +119,7 @@ class DatasetConfig(BaseModel):
     sample_rate: int = Field(default=22050, gt=0)
     segment_min_s: float = Field(default=1.0, gt=0)
     segment_max_s: float = Field(default=15.0, gt=0)
+    normalize: bool = False  # two-pass EBU R128 loudness normalization (--normalize)
     filters: FilterConfig = Field(default_factory=FilterConfig)
     diarize: DiarizeConfig = Field(default_factory=DiarizeConfig)
 

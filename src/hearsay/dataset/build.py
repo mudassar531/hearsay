@@ -18,7 +18,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hearsay import __version__
-from hearsay.dataset.audio import ensure_tools, probe_duration, slice_clip
+from hearsay.dataset.audio import (
+    ensure_filter,
+    ensure_tools,
+    probe_duration,
+    probe_sample_rate,
+    slice_clip,
+)
 from hearsay.dataset.diarize import Diarizer, assign_speaker, dominant_speaker, load_diarizer
 from hearsay.dataset.filters import detect_clipping_drops, filter_segments
 from hearsay.dataset.formats import (
@@ -136,8 +142,16 @@ def build_dataset(
     """
     ensure_tools()
     _validate_formats(config.formats)
+    if config.normalize:
+        ensure_filter("loudnorm")
     _make_wavs_dir(config.out_dir)
     diarizer, warnings = _resolve_diarizer(config, diarizer)
+    src_rate = probe_sample_rate(source_audio)
+    if 0 < src_rate < config.sample_rate:
+        warnings.append(
+            f"source audio is {src_rate} Hz but the target is {config.sample_rate} Hz; "
+            "upsampling adds no real high-frequency content."
+        )
     source_id = _safe_id(meta.video_id or meta.title)
     clips, drops = _produce_clips(
         source_audio,
@@ -234,7 +248,14 @@ def _produce_clips(
         clip_id = f"{source_id}_{index:04d}"
         rel = f"wavs/{clip_id}.wav"
         dest = out_dir / rel
-        slice_clip(source_audio, start, end, dest, sample_rate=config.sample_rate)
+        slice_clip(
+            source_audio,
+            start,
+            end,
+            dest,
+            sample_rate=config.sample_rate,
+            normalize=config.normalize,
+        )
         duration_s = probe_duration(dest)
         if duration_s <= _MIN_CLIP_S:
             dest.unlink(missing_ok=True)  # empty/near-empty slice — don't record it
@@ -459,6 +480,7 @@ def _state_fingerprint(config: DatasetConfig) -> str:
             "sample_rate": config.sample_rate,
             "segment_min_s": config.segment_min_s,
             "segment_max_s": config.segment_max_s,
+            "normalize": config.normalize,
             "filters": config.filters.model_dump(),
             # diarization changes which clips survive / how they're labelled; the token
             # is excluded (it doesn't change the output and shouldn't leak into state).
@@ -548,6 +570,8 @@ def build_combined_dataset(
     """
     ensure_tools()
     _validate_formats(config.formats)
+    if config.normalize:
+        ensure_filter("loudnorm")
     _make_wavs_dir(config.out_dir)
     out_dir = config.out_dir
     _ensure_unique_source_ids(sources)
