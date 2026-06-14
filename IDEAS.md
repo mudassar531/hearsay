@@ -20,3 +20,23 @@ now live in `SPEC.md` ("v0.2 — Dataset Export Mode") / `PROGRESS.md` rather th
   `audiofolder`). A dedicated **vector-store/embeddings exporter** (chunks → a vector
   DB) remains a possible smaller future add-on, distinct from training-dataset export,
   but is no longer the headline parked item.
+
+## From the real-world TTS audit (2026-06-15)
+
+A 6-lens audit of a dataset built from a real (multi-speaker, music-heavy) MrBeast
+video surfaced three gaps. The first — hard clip boundaries / no edge padding — is
+**fixed** (edge padding + a de-click fade; `--pad`). The other two are parked here
+because each needs real design, not a quick patch:
+
+- **Optional denoise / source-separation extra (`hearsay[denoise]`).** Diarization
+  isolates the right *voice* but cannot strip a background music/crowd bed mixed under
+  it (the audit measured a ~-22.8 dBFS noise floor with energy in the 60–250 Hz
+  music-bass band). A pre-slice speech-enhancement / source-separation pass (e.g.
+  Demucs or a denoiser) would lift in-the-wild audio toward clean TTS quality. Heavy
+  (torch) → must be an opt-in extra with its own model download, like `[diarize]`.
+- **Transcript-fidelity validation.** Quality filters check char-rate/duration, not
+  *correctness*, so a garbled-but-plausible-rate ASR line can survive (the audit found
+  one: "I would ben ab'tle to do do the good I."). A real fix is a cross-check pass
+  (re-transcribe with a larger reference model, or a second engine, and flag low
+  agreement) — deliberately **not** a brittle string heuristic, which would wrongly
+  drop verbatim disfluencies ("And I I couldn't") and break the verbatim guarantee.

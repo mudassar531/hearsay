@@ -38,6 +38,11 @@ pipelines read directly. The markdown/JSON engine is unchanged.
   Without it, datasets are mixed-speaker and the card says so.
 - **`--normalize`** — two-pass, length-preserving EBU R128 loudness normalization
   (`loudnorm`).
+- **Clean clip boundaries** — clips get a little edge padding (`--pad`, default
+  100 ms each side, capturing onset/offset phonemes the ASR word-timestamps clip)
+  plus a short in/out fade that removes the click/pop from cutting on a non-zero
+  sample. The quality filters still see the unpadded word extent, so padding never
+  changes which clips survive.
 - **Resumable combined builds** — a `_state.json` fingerprint lets an interrupted
   playlist/feed build resume, reconciling orphaned WAVs against the manifest.
 - **Web UI "Dataset" mode** — build a single source and download it as a zip
