@@ -208,6 +208,10 @@ def dataset(
     normalize: Annotated[
         bool, typer.Option("--normalize", help="EBU R128 loudness-normalize each clip.")
     ] = False,
+    pad: Annotated[
+        float,
+        typer.Option("--pad", help="Edge padding (seconds) added to each side of a clip."),
+    ] = 0.1,
     no_filter: Annotated[
         bool, typer.Option("--no-filter", help="Disable the quality filters (keep every clip).")
     ] = False,
@@ -260,6 +264,7 @@ def dataset(
         segment_min_s=segment_min,
         segment_max_s=segment_max,
         normalize=normalize,
+        edge_pad_s=pad,
         filters=FilterConfig(enabled=not no_filter, target_language=language or "en"),
         diarize=DiarizeConfig(
             enabled=diarize or per_speaker or dominant_speaker,

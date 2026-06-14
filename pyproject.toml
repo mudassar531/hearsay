@@ -1,7 +1,7 @@
 [project]
 name = "hearsay"
-version = "0.2.0"
-description = "crawl4ai for video & audio — turn any YouTube video, podcast episode, or local recording into clean, timestamped, LLM-ready markdown"
+version = "0.3.0"
+description = "crawl4ai for video & audio — turn any YouTube video, podcast, or recording into clean timestamped LLM-ready markdown, or TTS/STT training datasets"
 readme = "README.md"
 authors = [
     { name = "Mudassar Awan", email = "mudassar.awan@snapdev.ai" }

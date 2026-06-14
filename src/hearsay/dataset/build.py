@@ -224,6 +224,7 @@ def _produce_clips(
 
     # Pre-slice candidates (clamped span); Tier-1 filters run here so we never
     # waste an ffmpeg slice on a clip we are going to drop.
+    pad = config.edge_pad_s
     candidates: list[tuple[str, DatasetSegment, float]] = []
     spans: dict[str, tuple[float, float]] = {}
     for seg_index, seg in enumerate(segments, start=1):
@@ -232,8 +233,20 @@ def _produce_clips(
         if end - start <= 0:
             continue  # nothing left to slice (segment lies past the source end)
         ref = f"{source_id}_seg{seg_index:04d}"
+        # Filter on the verbatim word extent (unpadded), so padding never changes which
+        # clips survive the duration/rate filters — it only adds audio to what is kept.
+        # (The `oversized` flag and the max-duration filter therefore both describe the
+        # word extent; a kept clip's written WAV can be up to 2*pad seconds longer.)
         candidates.append((ref, seg, end - start))
-        spans[ref] = (start, end)
+        # Pad the slice *window* so onset/offset phonemes the ASR word-timestamps clip
+        # are captured, with a little edge silence/context (clamped to the media bounds).
+        # When the source duration is unknown (ffprobe failed) we do not extend past the
+        # unverifiable end — over-running EOF would yield a short WAV whose trailing fade
+        # (anchored at the requested duration) never fires, leaving the very click we add
+        # the fade to remove.
+        pstart = max(0.0, start - pad)
+        pend = min(end + pad, source_duration) if source_duration > 0 else end
+        spans[ref] = (pstart, pend)
 
     # Tier-1 quality filters (default on). Note an "oversized" clip (longer than
     # segment_max_s) is dropped here by the duration filter whenever
@@ -255,6 +268,7 @@ def _produce_clips(
             dest,
             sample_rate=config.sample_rate,
             normalize=config.normalize,
+            fade_s=config.fade_s,
         )
         duration_s = probe_duration(dest)
         if duration_s <= _MIN_CLIP_S:
@@ -471,9 +485,10 @@ def _error_message(exc: Exception) -> str:
 def _state_fingerprint(config: DatasetConfig) -> str:
     """A stable signature of the clip-affecting config, to invalidate stale resume state.
 
-    sample rate, segment bounds, and filters change the WAVs / which clips survive,
-    so resuming across a change of any of these would mix incompatible clips. (Output
-    formats are excluded — they only affect index files, which are always rewritten.)
+    Sample rate, segment bounds, normalize, edge padding, the de-click fade, filters,
+    and diarization all change the WAVs / which clips survive, so resuming across a
+    change of any of these would mix incompatible clips. (Output formats are excluded —
+    they only affect index files, which are always rewritten.)
     """
     return json.dumps(
         {
@@ -481,6 +496,8 @@ def _state_fingerprint(config: DatasetConfig) -> str:
             "segment_min_s": config.segment_min_s,
             "segment_max_s": config.segment_max_s,
             "normalize": config.normalize,
+            "edge_pad_s": config.edge_pad_s,
+            "fade_s": config.fade_s,
             "filters": config.filters.model_dump(),
             # diarization changes which clips survive / how they're labelled; the token
             # is excluded (it doesn't change the output and shouldn't leak into state).
