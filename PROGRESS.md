@@ -571,11 +571,43 @@ gitignored `local.env`). Then a real 2-speaker clip diarizes into per-speaker / 
 
 ## PHASE D6 — Both front ends + docs
 
-- [ ] CLI flags fully wired: `--out`, `--format`, `--sample-rate`, `--segment-min/max`, `--lang`, `--normalize`, `--diarize`/`--per-speaker`/`--dominant-speaker`, `--vad`, filter toggles
-- [ ] Web UI "Dataset mode": choose dataset output + options, run, download dataset as a zip; hint that big playlists are better via CLI
-- [ ] README "Build training datasets" section (honest accuracy/rights notes, comparison to markdown mode); comparison table + topics updated
+- [x] CLI `hearsay dataset <SOURCE>` subcommand: routing (file/playlist/video/feed, like `ingest`) + all flags wired to `DatasetConfig` — `--out`, repeatable `--format`, `--sample-rate`, `--segment-min/max`, `--lang`, `--model`, `--vad/--no-vad`, `--normalize`, `--no-filter`, `--diarize`/`--per-speaker`/`--dominant-speaker`, `--hf-token`, `--min/max-speakers`, `--limit`, `--no-resume`; rich summary + warnings — verified: 9 CLI tests + live run
+- [x] Web UI "Dataset mode": a toggle + options (segment bounds, sample rate) builds a single source, zips it, downloads it; playlists/feeds → CLI hint — verified: 8 web tests (incl. zip round-trip, 400 on bad params, no temp leak) + live HTTP run
+- [x] `--normalize` (two-pass EBU R128 loudnorm, length-preserving) + ffmpeg filter check + source-rate upsampling warning (D2-deferred) — verified: audio tests (length preserved, mono @ target, upsampling warning)
+- [x] README "Build training datasets" section (honest accuracy/rights notes, comparison to markdown mode); comparison-table row + CLI reference + TOC + `hearsay[diarize]` install + keywords updated — verified: every documented flag exists; commands run
 
-**Acceptance:** CLI + web-UI dataset runs both produce a loadable dataset; README path verified. **STOP.**
+**Acceptance:** CLI + web-UI dataset runs both produce a loadable dataset; README path verified.
+
+### Phase D6 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg 8.1). An independent
+4-lens adversarial review (CLI / web / loudnorm / docs) verified the code and found
+**3 real bugs**, all fixed: (1) single-pass loudnorm trimmed ~89 ms off each clip →
+switched to **two-pass** (`linear=true`, length-preserving — verified 2.000 s in and
+out); (2) bad web numeric params returned a 500 → now a friendly 400; (3) `[diarize]`
+in help/warnings was parsed as Rich markup → help rephrased and dynamic strings
+`rich.markup.escape`-d. 5 improvements applied (`--lang ""`→None, large-source UI hint,
++ audio/loudnorm/upsampling/web-cleanup tests).
+
+```text
+$ uv run pytest            # full suite — markdown/JSON path + D1-D5 unchanged
+309 passed in 18.57s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   53 files already formatted   Success: no issues found in 51 source files
+```
+
+**Live acceptance — both front ends produce a loadable dataset:**
+
+```text
+# CLI
+$ hearsay dataset tests/fixtures/sample.wav --out /tmp/ds-cli --model tiny --sample-rate 16000 --no-filter
+✓ 1 clips · 00:00:04 · → /tmp/ds-cli/   (wavs/ + metadata.csv + manifest.jsonl + dataset_card.md + dropped.jsonl)
+
+# Web UI (POST /api/dataset-file with the fixture)
+status 200 · dataset True · clips 1 · zip contains:
+  ['dataset_card.md','dropped.jsonl','manifest.jsonl','metadata.csv','wavs/sample_0001.wav']
+```
 
 ## PHASE D7 — Launch-ready polish
 
