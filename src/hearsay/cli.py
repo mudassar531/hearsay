@@ -136,6 +136,23 @@ def mcp_command() -> None:
         raise typer.Exit(code=1) from exc
 
 
+@app.command("web", help="Run a simple local web UI in your browser.")
+def web_command(
+    host: Annotated[str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8756,
+) -> None:
+    """Start the hearsay web UI (paste a URL or upload a file in the browser)."""
+    from hearsay.webui import run_server
+
+    try:
+        run_server(host=host, port=port)
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except OSError as exc:
+        err_console.print(f"[red]Could not start the web server:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("ingest", help=PITCH)
 def ingest(
     source: Annotated[
