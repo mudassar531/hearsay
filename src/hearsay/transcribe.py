@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from hearsay.errors import TranscriptionError
-from hearsay.models import Segment
+from hearsay.models import Segment, Word
 
 # Whisper sizes, smallest (fastest) to largest (most accurate).
 WHISPER_SIZES = ("tiny", "base", "small", "medium", "large-v3")
@@ -56,6 +56,9 @@ class TranscriptionResult(NamedTuple):
 
     ``method`` is the document-facing label (e.g. ``whisper-small`` or
     ``parakeet-tdt-0.6b-v3``); ``model_size`` is the requested model identifier.
+    ``words`` is the engine-agnostic word-level timing, populated only when
+    ``word_timestamps=True`` (dataset mode); ``None`` otherwise, so the markdown
+    path and its JSON schema are unaffected.
     """
 
     segments: list[Segment]
@@ -63,6 +66,7 @@ class TranscriptionResult(NamedTuple):
     duration_s: float
     model_size: str
     method: str
+    words: list[Word] | None = None
 
 
 def transcribe_audio(
@@ -72,6 +76,7 @@ def transcribe_audio(
     language: str | None = None,
     local_files_only: bool = False,
     vad_filter: bool = True,
+    word_timestamps: bool = False,
     on_progress: ProgressCallback | None = None,
 ) -> TranscriptionResult:
     """Transcribe an audio/video file into timed segments.
@@ -87,6 +92,9 @@ def transcribe_audio(
         vad_filter: Voice-activity detection (Whisper only). ``True`` (default)
             skips silence/music beds — right for speech. Set ``False`` for
             music/songs. Parakeet ignores this (it has no VAD pre-filter).
+        word_timestamps: When True, also return engine-agnostic word-level
+            timings on ``result.words`` (for dataset mode). Default False, so the
+            markdown/JSON path is unchanged and pays no extra cost.
         on_progress: Optional callback invoked with (processed_s, total_s).
 
     Raises:
@@ -101,6 +109,7 @@ def transcribe_audio(
             repo_id=identifier,
             language=language,
             local_files_only=local_files_only,
+            word_timestamps=word_timestamps,
             on_progress=on_progress,
         )
     return _transcribe_whisper(
@@ -109,6 +118,7 @@ def transcribe_audio(
         language=language,
         local_files_only=local_files_only,
         vad_filter=vad_filter,
+        word_timestamps=word_timestamps,
         on_progress=on_progress,
     )
 
@@ -154,6 +164,7 @@ def _transcribe_parakeet(
     repo_id: str,
     language: str | None,
     local_files_only: bool,
+    word_timestamps: bool,
     on_progress: ProgressCallback | None,
 ) -> TranscriptionResult:
     """Transcribe via NVIDIA Parakeet on MLX (Apple Silicon GPU/Neural Engine)."""
@@ -198,12 +209,18 @@ def _transcribe_parakeet(
     if on_progress is not None:
         on_progress(duration_s, duration_s)
     label = repo_id.split("/")[-1]
+    words: list[Word] | None = None
+    if word_timestamps:
+        from hearsay.dataset.words import words_from_parakeet
+
+        words = words_from_parakeet(result.tokens)
     return TranscriptionResult(
         segments=segments,
         language=language or "en",
         duration_s=duration_s,
         model_size=label,
         method=label,
+        words=words,
     )
 
 
@@ -305,6 +322,7 @@ def _transcribe_whisper(
     language: str | None,
     local_files_only: bool,
     vad_filter: bool,
+    word_timestamps: bool,
     on_progress: ProgressCallback | None,
 ) -> TranscriptionResult:
     """Transcribe via faster-whisper on CPU (int8)."""
@@ -314,10 +332,15 @@ def _transcribe_whisper(
     # a bad file; Segment construction is done afterward so a model invariant
     # slip (e.g. end < start) surfaces honestly, not as a bogus "bad file".
     raw: list[tuple[str, float, float]] = []
+    raw_words: list = []  # faster-whisper Word objects, only when word_timestamps
     try:
-        segment_iter, info = model.transcribe(str(path), language=language, vad_filter=vad_filter)
+        segment_iter, info = model.transcribe(
+            str(path), language=language, vad_filter=vad_filter, word_timestamps=word_timestamps
+        )
         for seg in segment_iter:
             raw.append((seg.text, seg.start, seg.end))
+            if word_timestamps and seg.words:
+                raw_words.extend(seg.words)
             if on_progress is not None:
                 on_progress(min(seg.end, info.duration), info.duration)
     except Exception as exc:
@@ -336,12 +359,18 @@ def _transcribe_whisper(
         segments.append(Segment(text=text, start_s=start_s, end_s=end_s))
     if on_progress is not None:
         on_progress(info.duration, info.duration)
+    words: list[Word] | None = None
+    if word_timestamps:
+        from hearsay.dataset.words import words_from_whisper
+
+        words = words_from_whisper(raw_words)
     return TranscriptionResult(
         segments=segments,
         language=info.language or "en",
         duration_s=float(info.duration),
         model_size=model_size,
         method=f"whisper-{model_size}",
+        words=words,
     )
 
 
