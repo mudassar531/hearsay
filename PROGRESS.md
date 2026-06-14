@@ -383,12 +383,56 @@ determinism. The markdown/JSON path is untouched (`word_timestamps` defaults Fal
 
 ## PHASE D2 — Audio export + manifest
 
-- [ ] `dataset/audio.py`: ffmpeg slice (input-seek `-ss START -i -t DUR`, re-encode, `-ac 1`, `-ar SR`, `pcm_s16le`); ffprobe; verify ffmpeg has needed filters
-- [ ] `dataset/formats.py`: LJSpeech `metadata.csv` (`id|text|text`) **and** NeMo `manifest.jsonl` **and** `dataset_card.md` (provenance, counts, total duration, language, rights/consent note); optional HF `audiofolder`
-- [ ] `dataset/build.py`: orchestrate one source → dataset folder; clip naming `<source_id>_<index4>.wav`
-- [ ] Tests: manifest/csv shape + schema; audio↔text↔duration alignment on the tiny fixture clip
+- [x] `dataset/audio.py`: ffmpeg slice (input-seek `-ss START -i -t DUR`, re-encode, `-ac 1`, `-ar SR`, `pcm_s16le`); ffprobe duration; `ensure_tools()` verifies ffmpeg+ffprobe on PATH (filter-availability checks land with `--normalize` in D6) — verified: real slicing of the fixture; ffprobe confirms mono @ target SR
+- [x] `dataset/formats.py`: LJSpeech `metadata.csv` (`id|text|text`) **and** NeMo `manifest.jsonl` **and** `dataset_card.md` (provenance, counts, total duration, language, rights/consent note); optional HF `audiofolder` (`metadata.jsonl`, no collision) — verified: 8 format tests incl. non-ASCII title + pipe-safety
+- [x] `dataset/build.py`: orchestrate one source → dataset folder; clip naming `<source_id>_<index4>.wav`; clamp ends to media length, drop past-EOF ghost clips — verified: 8 build tests + live YouTube run
+- [x] Tests: manifest/csv shape; audio↔text↔duration alignment on the fixture clip; oversized + past-EOF cases — verified: 16 D2 tests pass offline (ffmpeg on local files)
 
-**Acceptance:** run on one short real video → a folder a TTS/STT pipeline could load; clip count correct, audio+text line up, durations right. **STOP.**
+**Acceptance:** run on one short real video → a folder a TTS/STT pipeline could load; clip count correct, audio+text line up, durations right.
+
+### Phase D2 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg/ffprobe 8.1). An
+independent 4-lens review (ffmpeg correctness / format conformance / build
+orchestration / offline+spec) adversarially verified the code and caught **2 real
+bugs** — both fixed: (1) `dataset_card.md` emitted `pretty_name`/`language` with
+`ensure_ascii=True`, producing lone surrogates in YAML for emoji titles; (2) a clip
+whose end ran past the source produced a 0-second "ghost" clip with a `duration: 0.0`
+manifest row. Build now clamps clip ends to the probed media length and drops
+fully-past-EOF clips. 6 improvements applied (start-clamp consistency, doc wording,
+extra regression tests).
+
+```text
+$ uv run pytest tests/test_dataset_formats.py tests/test_dataset_build.py
+16 passed in 1.69s
+
+$ uv run pytest            # full suite — markdown/JSON path unchanged
+234 passed in 11.21s
+
+$ uv run ruff check . && uv run mypy
+All checks passed!
+Success: no issues found in 43 source files
+```
+
+**Live acceptance** — one short real video → a loadable dataset (tiny model):
+
+```text
+$ build_dataset_from_youtube("https://www.youtube.com/watch?v=jNQXAC9IVRw", sr=22050, max=10s)
+clips: 3 · total: 14.42s · oversized: 0 · lang: en · files: metadata.csv, manifest.jsonl, dataset_card.md
+
+/tmp/hearsay-ds-acc/
+  wavs/{jNQXAC9IVRw_0001,_0002,_0003}.wav   # ffprobe: 22050 Hz, mono; 3.34 / 9.22 / 1.86 s
+  metadata.csv     # jNQXAC9IVRw_0001|All right, so here we are...|All right, so here we are...
+  manifest.jsonl   # {"audio_filepath":"wavs/jNQXAC9IVRw_0001.wav","duration":3.34,"text":"...","offset":0.0}
+  dataset_card.md  # YAML (license: unknown, "en", pretty_name "Me at the zoo") + provenance + consent note
+```
+
+Manifest durations exactly match the probed WAV durations (audio↔text↔duration aligned).
+
+**Tracked for later phases (from the review, intentionally deferred):**
+- Source-sample-rate-below-target **upsampling warning** (design memo §3) → D6 (user-facing channel).
+- ffmpeg **filter-availability** check (loudnorm/silenceremove) → D6, with `--normalize`.
+- `_safe_id` **collision** across same-titled sources is harmless for single-source D2; D4 batch must dedupe (like `batch.ensure_unique_slugs`).
 
 ## PHASE D3 — Quality filtering
 
