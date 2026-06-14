@@ -77,7 +77,11 @@ def slice_clip(
     ]
     try:
         proc = subprocess.run(
-            args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_SLICE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
@@ -107,7 +111,11 @@ def probe_duration(path: Path) -> float:
     ]
     try:
         proc = subprocess.run(
-            args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_PROBE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:

@@ -402,6 +402,4 @@ def test_property_invariants_over_random_inputs() -> None:
             assert s.oversized == (s.duration_s > eff_max + 1e-12)
 
         # 7. determinism
-        assert segment_words(
-            words, min_s=min_s, max_s=max_s, pause_break_s=pause_break_s
-        ) == segs
+        assert segment_words(words, min_s=min_s, max_s=max_s, pause_break_s=pause_break_s) == segs

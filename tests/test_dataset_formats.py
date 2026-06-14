@@ -18,12 +18,20 @@ from hearsay.models import SourceMetadata
 def _clips() -> list[DatasetClip]:
     return [
         DatasetClip(
-            id="vid_0001", audio_path="wavs/vid_0001.wav",
-            text="Hello there, world.", start_s=0.0, end_s=2.0, duration_s=2.0,
+            id="vid_0001",
+            audio_path="wavs/vid_0001.wav",
+            text="Hello there, world.",
+            start_s=0.0,
+            end_s=2.0,
+            duration_s=2.0,
         ),
         DatasetClip(
-            id="vid_0002", audio_path="wavs/vid_0002.wav",
-            text="A pipe | and a newline\nin here", start_s=2.5, end_s=5.0, duration_s=2.5,
+            id="vid_0002",
+            audio_path="wavs/vid_0002.wav",
+            text="A pipe | and a newline\nin here",
+            start_s=2.5,
+            end_s=5.0,
+            duration_s=2.5,
         ),
     ]
 
@@ -87,17 +95,30 @@ def test_size_category() -> None:
 def test_dataset_card(tmp_path: Path) -> None:
     clips = _clips()
     meta = SourceMetadata(
-        title="My Talk", source="https://youtu.be/abc", channel="Some Channel",
-        duration_s=300.0, video_id="abc",
+        title="My Talk",
+        source="https://youtu.be/abc",
+        channel="Some Channel",
+        duration_s=300.0,
+        video_id="abc",
     )
     report = BuildReport(
-        out_dir=str(tmp_path), source=meta.source, clip_count=len(clips),
-        total_duration_s=4.5, oversized_count=0, sample_rate=22050, language="en",
-        formats=["ljspeech", "jsonl"], clips=clips,
+        out_dir=str(tmp_path),
+        source=meta.source,
+        clip_count=len(clips),
+        total_duration_s=4.5,
+        oversized_count=0,
+        sample_rate=22050,
+        language="en",
+        formats=["ljspeech", "jsonl"],
+        clips=clips,
     )
     name = write_dataset_card(
-        tmp_path, report, meta, version="0.2.0",
-        generated_at="2026-06-14T10:00:00Z", source_platform="youtube",
+        tmp_path,
+        report,
+        meta,
+        version="0.2.0",
+        generated_at="2026-06-14T10:00:00Z",
+        source_platform="youtube",
     )
     card = (tmp_path / name).read_text(encoding="utf-8")
     assert card.startswith("---\n")  # YAML front matter
@@ -116,12 +137,21 @@ def test_dataset_card_non_ascii_title_and_language(tmp_path: Path) -> None:
     # An emoji (astral-plane) title must be written as the real character, not a
     # \u surrogate pair, so the YAML front matter has no lone surrogates.
     meta = SourceMetadata(
-        title="My 🎙 Podcast", source="local.wav", channel="Me",
-        duration_s=10.0, video_id="x",
+        title="My 🎙 Podcast",
+        source="local.wav",
+        channel="Me",
+        duration_s=10.0,
+        video_id="x",
     )
     report = BuildReport(
-        out_dir=str(tmp_path), source="local.wav", clip_count=1, total_duration_s=2.0,
-        oversized_count=0, sample_rate=22050, language="en", formats=["jsonl"],
+        out_dir=str(tmp_path),
+        source="local.wav",
+        clip_count=1,
+        total_duration_s=2.0,
+        oversized_count=0,
+        sample_rate=22050,
+        language="en",
+        formats=["jsonl"],
     )
     write_dataset_card(tmp_path, report, meta, version="0.2.0", generated_at="2026-06-14T00:00:00Z")
     card = (tmp_path / "dataset_card.md").read_text(encoding="utf-8")

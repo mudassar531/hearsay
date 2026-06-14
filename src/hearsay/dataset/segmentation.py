@@ -158,15 +158,32 @@ def segment_words(
     for lo, hi in runs:
         pieces.extend(
             _split_run(
-                r_start, r_end, gap_after, sent, clause, words, lo, hi,
-                min_s=min_s, max_s=max_s, target_s=target_s,
+                r_start,
+                r_end,
+                gap_after,
+                sent,
+                clause,
+                words,
+                lo,
+                hi,
+                min_s=min_s,
+                max_s=max_s,
+                target_s=target_s,
             )
         )
 
     # Phase 3: merge a tiny trailing clip back unless a long pause isolates it.
     pieces = _fix_tiny_tail(
-        r_start, r_end, gap_after, sent, clause, words, pieces,
-        min_s=min_s, max_s=max_s, isolate_factor=isolate_factor,
+        r_start,
+        r_end,
+        gap_after,
+        sent,
+        clause,
+        words,
+        pieces,
+        min_s=min_s,
+        max_s=max_s,
+        isolate_factor=isolate_factor,
     )
 
     out: list[DatasetSegment] = []
@@ -288,8 +305,17 @@ def _split_run(
 
         if candidates:
             cut = _best_cut(
-                r_start, r_end, gap_after, sent, clause, words, i, candidates,
-                min_s=min_s, max_s=max_s, target_s=target_s,
+                r_start,
+                r_end,
+                gap_after,
+                sent,
+                clause,
+                words,
+                i,
+                candidates,
+                min_s=min_s,
+                max_s=max_s,
+                target_s=target_s,
             )
         elif overshoot > i:
             # No in-window boundary (a long word skipped the budget window): break
