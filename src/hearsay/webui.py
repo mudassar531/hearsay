@@ -13,8 +13,11 @@ sidestepping multipart parsing (and ``cgi``, which is gone in Python 3.13).
 History lives entirely in the browser (localStorage); the server is stateless.
 """
 
+import base64
+import io
 import json
 import tempfile
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -103,6 +106,102 @@ def _document_payload(doc: Document) -> dict:
     }
 
 
+# --- Dataset mode (single source -> a downloadable zip) --------------------
+
+_DEFAULT_DATASET_FORMATS = ["ljspeech", "jsonl"]
+
+
+def _zip_dir(root: Path) -> bytes:
+    """Zip a directory tree into in-memory bytes (relative paths)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                zf.write(path, path.relative_to(root).as_posix())
+    return buf.getvalue()
+
+
+def _dataset_payload(out_dir: Path, report: object) -> dict:
+    """Shape a build report + the zipped dataset into the JSON the page downloads."""
+    return {
+        "ok": True,
+        "dataset": True,
+        "clips": report.clip_count,  # type: ignore[attr-defined]
+        "duration": format_timestamp(report.total_duration_s),  # type: ignore[attr-defined]
+        "dropped": report.dropped_count,  # type: ignore[attr-defined]
+        "warnings": report.warnings,  # type: ignore[attr-defined]
+        "zip_name": f"{out_dir.name}.zip",
+        "zip_b64": base64.b64encode(_zip_dir(out_dir)).decode("ascii"),
+    }
+
+
+def _dataset_config(out_dir: Path, opts: dict):
+    from hearsay.dataset.models import DatasetConfig
+
+    formats = opts.get("formats") or _DEFAULT_DATASET_FORMATS
+    try:
+        return DatasetConfig(
+            out_dir=out_dir,
+            formats=list(formats),
+            sample_rate=int(opts.get("sample_rate") or 22050),
+            segment_min_s=float(opts.get("segment_min") or 1.0),
+            segment_max_s=float(opts.get("segment_max") or 15.0),
+        )
+    except (ValueError, TypeError) as exc:  # bad numeric option -> a 400, not an opaque 500
+        raise InvalidSourceError(
+            f"Invalid dataset option: {exc}",
+            hint="sample-rate must be a positive integer and segment bounds positive numbers.",
+        ) from exc
+
+
+def build_url_dataset(url: str, *, opts: dict) -> dict:
+    """Build a dataset from one YouTube video URL and return a zip payload."""
+    from hearsay.dataset.build import build_dataset_from_youtube
+
+    url = url.strip()
+    if not url:
+        raise InvalidSourceError("No URL provided.", hint="Paste a YouTube video link.")
+    if extract_playlist_id(url) is not None:
+        raise InvalidSourceError(
+            "Playlists aren't supported in the web UI's dataset mode.",
+            hint="Use the CLI for batch sources, e.g. hearsay dataset <playlist-url>.",
+        )
+    if extract_video_id(url) is None:
+        raise InvalidSourceError(
+            f"Not a recognized YouTube video URL: {url}",
+            hint="Paste a single YouTube video link, or upload a file instead.",
+        )
+    with tempfile.TemporaryDirectory(prefix="hearsay-web-ds-") as tmp:
+        out_dir = Path(tmp) / "hearsay-dataset"
+        report = build_dataset_from_youtube(
+            url,
+            config=_dataset_config(out_dir, opts),
+            model_size=str(opts.get("model") or DEFAULT_MODEL),
+            language=(opts.get("lang") or None),
+            vad_filter=bool(opts.get("vad", True)),
+        )
+        return _dataset_payload(out_dir, report)
+
+
+def build_file_dataset(name: str, data: bytes, *, opts: dict) -> dict:
+    """Build a dataset from an uploaded file and return a zip payload."""
+    from hearsay.dataset.build import build_dataset_from_file
+
+    safe_name = Path(name).name or "upload"
+    with tempfile.TemporaryDirectory(prefix="hearsay-web-ds-") as tmp:
+        source = Path(tmp) / safe_name
+        source.write_bytes(data)
+        out_dir = Path(tmp) / "hearsay-dataset"
+        report = build_dataset_from_file(
+            source,
+            config=_dataset_config(out_dir, opts),
+            model_size=str(opts.get("model") or DEFAULT_MODEL),
+            language=(opts.get("lang") or None),
+            vad_filter=bool(opts.get("vad", True)),
+        )
+        return _dataset_payload(out_dir, report)
+
+
 # --- HTTP server ----------------------------------------------------------
 
 
@@ -125,9 +224,13 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/url":
-                doc = self._handle_url()
+                payload = _document_payload(self._handle_url())
             elif parsed.path == "/api/file":
-                doc = self._handle_file(parse_qs(parsed.query))
+                payload = _document_payload(self._handle_file(parse_qs(parsed.query)))
+            elif parsed.path == "/api/dataset":
+                payload = self._handle_dataset_url()
+            elif parsed.path == "/api/dataset-file":
+                payload = self._handle_dataset_file(parse_qs(parsed.query))
             else:
                 self._send_json({"ok": False, "error": "Not found."}, status=404)
                 return
@@ -136,7 +239,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # surface anything unexpected as a 500
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         else:
-            self._send_json(_document_payload(doc))
+            self._send_json(payload)
 
     # -- request helpers --
 
@@ -168,6 +271,25 @@ class _Handler(BaseHTTPRequestHandler):
         lang = (query.get("lang") or [""])[0] or None
         vad = (query.get("vad") or ["1"])[0] != "0"
         return process_file(name, data, model=model, language=lang, vad=vad)
+
+    def _handle_dataset_url(self) -> dict:
+        body = json.loads(self._read_body() or b"{}")
+        return build_url_dataset(str(body.get("url", "")), opts=body)
+
+    def _handle_dataset_file(self, query: dict[str, list[str]]) -> dict:
+        data = self._read_body()
+        if not data:
+            raise InvalidSourceError("No file received.", hint="Choose an audio/video file.")
+        name = (query.get("name") or ["upload"])[0]
+        opts: dict = {
+            "model": (query.get("model") or [DEFAULT_MODEL])[0],
+            "lang": (query.get("lang") or [""])[0] or None,
+            "vad": (query.get("vad") or ["1"])[0] != "0",
+            "sample_rate": (query.get("sample_rate") or ["22050"])[0],
+            "segment_min": (query.get("segment_min") or ["1.0"])[0],
+            "segment_max": (query.get("segment_max") or ["15.0"])[0],
+        }
+        return build_file_dataset(name, data, opts=opts)
 
     # -- response helpers --
 
@@ -428,6 +550,12 @@ _PAGE = r"""<!doctype html>
           <label id="wrapTr"><input type="checkbox" id="transcribe"> Force transcription</label>
           <label><input type="checkbox" id="vad" checked> VAD</label>
           <label style="text-transform:none;letter-spacing:0">Lang <input type="text" id="lang" placeholder="auto"></label>
+          <label title="Build a TTS/STT training dataset (downloads a .zip)"><input type="checkbox" id="dataset"> Dataset</label>
+        </div>
+        <div class="copts" id="dsOpts" style="display:none">
+          <label style="text-transform:none;letter-spacing:0">Seg s <input type="text" id="segMin" value="1" style="width:42px"> – <input type="text" id="segMax" value="15" style="width:42px"></label>
+          <label style="text-transform:none;letter-spacing:0">Rate <input type="text" id="sr" value="22050" style="width:64px"></label>
+          <span style="color:var(--muted);font-size:10px">Playlists/feeds &amp; long sources → use the CLI</span>
         </div>
       </div>
       <div class="hint">LOCAL TRANSCRIPTION DOWNLOADS THE MODEL ONCE, THEN RUNS OFFLINE</div>
@@ -563,11 +691,30 @@ function openItem(item){
 function newChat(){ pickedFile=null; updChip(); $('#input').value=''; autoGrow(); showHero(); }
 $('#new').onclick=newChat;
 
+function downloadZip(b64, name){
+  const bin=atob(b64); const arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr],{type:'application/zip'}));
+  a.download=name||'hearsay-dataset.zip'; a.click(); URL.revokeObjectURL(a.href);
+}
+function datasetNode(d){
+  const wrap=document.createElement('div'); wrap.className='doc';
+  const warns=(d.warnings||[]).map(w=>'<p style="color:var(--accent)">! '+esc(w)+'</p>').join('');
+  wrap.innerHTML='<div class="doc-head"><div class="meta">'+
+    '<span class="badge">DATASET</span>'+
+    '<span><b>'+d.clips+'</b> clips</span><span>duration <b>'+esc(d.duration)+'</b></span>'+
+    '<span>dropped <b>'+d.dropped+'</b></span></div>'+
+    '<div class="doc-actions"><button data-a="dl">Download .zip</button></div></div>'+
+    '<div class="doc-body"><div class="md"><p>Dataset ready — the .zip download should have started.</p>'+warns+'</div></div>';
+  wrap.querySelector('[data-a=dl]').onclick=()=>downloadZip(d.zip_b64,d.zip_name);
+  return wrap;
+}
+
 async function submit(){
   const text=$('#input').value.trim();
   if(!pickedFile && !text) return;
   const model=$('#model').value, lang=$('#lang').value.trim(),
-        vad=$('#vad').checked, transcribe=$('#transcribe').checked;
+        vad=$('#vad').checked, transcribe=$('#transcribe').checked, dataset=$('#dataset').checked;
   const sourceLabel = pickedFile ? ('File · '+pickedFile.name) : text;
 
   if(stream.querySelector('.hero')) clearStream();
@@ -579,6 +726,23 @@ async function submit(){
 
   try{
     let res;
+    if(dataset){
+      const ds={model,lang,vad,segment_min:$('#segMin').value,segment_max:$('#segMax').value,sample_rate:$('#sr').value};
+      if(fileToSend){
+        const q=new URLSearchParams({name:fileToSend.name,model,lang,vad:vad?'1':'0',
+          segment_min:ds.segment_min,segment_max:ds.segment_max,sample_rate:ds.sample_rate});
+        res=await fetch('/api/dataset-file?'+q,{method:'POST',body:fileToSend});
+      }else{
+        res=await fetch('/api/dataset',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({url:text,...ds})});
+      }
+      const d=await res.json();
+      if(!d.ok) throw new Error((d.error||'Failed')+(d.hint?'\nTry: '+d.hint:''));
+      downloadZip(d.zip_b64,d.zip_name);
+      thinking.querySelector('.body').innerHTML=''; thinking.querySelector('.body').appendChild(datasetNode(d));
+      $('#topTitle').textContent='Dataset · '+d.clips+' clips';
+      return;  // datasets aren't added to history (not re-openable as markdown)
+    }
     if(fileToSend){
       const q=new URLSearchParams({name:fileToSend.name,model,lang,vad:vad?'1':'0'});
       res=await fetch('/api/file?'+q,{method:'POST',body:fileToSend});
@@ -600,6 +764,7 @@ async function submit(){
   }
 }
 $('#send').onclick=submit;
+$('#dataset').onchange=e=>{ $('#dsOpts').style.display=e.target.checked?'flex':'none'; };
 
 /* ---- composer behaviour ---- */
 const input=$('#input'), comp=$('#composer');
