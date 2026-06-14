@@ -73,13 +73,16 @@ def slice_clip(
     *,
     sample_rate: int = 22050,
     normalize: bool = False,
+    fade_s: float = 0.0,
 ) -> None:
     """Write ``source``'s ``[start_s, end_s]`` as a mono 16-bit PCM WAV at ``sample_rate``.
 
     Re-encodes (lossless for PCM) using input seeking + a duration, so the cut is
     frame-accurate and the timestamps map directly to the source. ``normalize`` applies
-    two-pass EBU R128 loudness normalization (``loudnorm``, length-preserving). Raises
-    AudioExportError on failure.
+    two-pass EBU R128 loudness normalization (``loudnorm``, length-preserving). ``fade_s``
+    (when > 0 and the clip is longer than two fades) applies a short in/out fade that
+    removes the click/pop from cutting on a non-zero sample, without changing the clip's
+    length. Raises AudioExportError on failure.
     """
     # Clamp the start once and derive the duration from the clamped start, so a
     # negative start can never make -ss and -t disagree (which would over-run the clip).
@@ -100,8 +103,16 @@ def slice_clip(
         "-t",
         f"{duration:.3f}",
     ]
-    if normalize:  # two-pass loudnorm (measure -> linear apply) before the output -ar resamples
-        args += ["-af", _loudnorm_filter(source, start, duration)]
+    # Build the -af chain: loudnorm first (measure -> linear apply, length-preserving),
+    # then a short edge fade to de-click the boundaries. Both run before the output -ar.
+    filters: list[str] = []
+    if normalize:
+        filters.append(_loudnorm_filter(source, start, duration))
+    if fade_s > 0 and duration > 2 * fade_s:
+        filters.append(f"afade=t=in:st=0:d={fade_s:.3f}")
+        filters.append(f"afade=t=out:st={duration - fade_s:.3f}:d={fade_s:.3f}")
+    if filters:
+        args += ["-af", ",".join(filters)]
     args += [
         "-ar",
         str(sample_rate),

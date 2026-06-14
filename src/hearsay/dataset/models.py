@@ -120,6 +120,8 @@ class DatasetConfig(BaseModel):
     segment_min_s: float = Field(default=1.0, gt=0)
     segment_max_s: float = Field(default=15.0, gt=0)
     normalize: bool = False  # two-pass EBU R128 loudness normalization (--normalize)
+    edge_pad_s: float = Field(default=0.1, ge=0)  # context/silence padded onto each clip edge
+    fade_s: float = Field(default=0.01, ge=0)  # short in/out fade that de-clicks the cut edges
     filters: FilterConfig = Field(default_factory=FilterConfig)
     diarize: DiarizeConfig = Field(default_factory=DiarizeConfig)
 
