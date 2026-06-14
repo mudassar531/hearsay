@@ -222,10 +222,10 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   --latest             Batch: ingest only the most recent item
   --episode N          Batch: ingest only item N (1-indexed)
   --all [--limit N]    Batch: ingest all items (optionally capped)
-  --version            Show version
 
 hearsay web            Run the local web UI (--host, --port)
 hearsay mcp            Run the MCP stdio server
+hearsay --version      Show the version
 ```
 
 ## Requirements
@@ -245,7 +245,7 @@ hearsay mcp            Run the MCP stdio server
 | Windows (Chocolatey) | `choco install ffmpeg` |
 
 The first transcription downloads the chosen model once (Whisper: tens of MB to
-~1.5 GB; Parakeet: ~600 MB), then caches it for offline use.
+~1.5 GB; Parakeet v3: ~2.5 GB), then caches it for offline use.
 
 > **Apple Silicon speed:** the `parakeet` extra (`uv tool install
 > "hearsay[parakeet]"`) runs NVIDIA Parakeet on MLX, transcribing ~3× faster

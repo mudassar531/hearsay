@@ -159,8 +159,12 @@ def _transcribe_parakeet(
     """Transcribe via NVIDIA Parakeet on MLX (Apple Silicon GPU/Neural Engine)."""
     model = _load_parakeet(repo_id, local_files_only=local_files_only)
     sample_rate = model.preprocessor_config.sample_rate
+    audio_total_s = 0.0  # true media length, learned from the chunk callback
 
     def _chunk_cb(end_samples: float, total_samples: float) -> None:
+        nonlocal audio_total_s
+        if total_samples > 0:
+            audio_total_s = total_samples / sample_rate
         if on_progress is not None and total_samples > 0:
             on_progress(min(end_samples, total_samples) / sample_rate, total_samples / sample_rate)
 
@@ -185,7 +189,12 @@ def _transcribe_parakeet(
         end_s = max(float(sent.end), start_s)
         segments.append(Segment(text=text, start_s=start_s, end_s=end_s))
 
-    duration_s = segments[-1].end_s if segments else 0.0
+    # Prefer the true media length (from the chunk callback) so trailing silence
+    # or a speechless file still reports the real duration — matching the Whisper
+    # path. The callback doesn't fire for clips <= one chunk (120s), so fall back
+    # to the last spoken segment's end there.
+    last_seg_end = segments[-1].end_s if segments else 0.0
+    duration_s = max(audio_total_s, last_seg_end)
     if on_progress is not None:
         on_progress(duration_s, duration_s)
     label = repo_id.split("/")[-1]
@@ -214,6 +223,7 @@ def _load_parakeet(repo_id: str, *, local_files_only: bool):
     # parakeet-mlx has no offline-only switch; force Hugging Face into offline
     # mode so a cached model loads without any network round-trip. The env var
     # alone is read at import time, so we also flip the live module constant.
+    _ensure_download_timeout()
     with _hf_offline(local_files_only):
         try:
             return from_pretrained(repo_id)
@@ -221,7 +231,7 @@ def _load_parakeet(repo_id: str, *, local_files_only: bool):
             raise TranscriptionError(
                 f"Could not load the Parakeet model '{repo_id}': {exc}",
                 hint=(
-                    "The model downloads once (~600MB). Check your network on first "
+                    "The model downloads once (~2.5GB). Check your network on first "
                     "use, then it is cached for offline runs."
                 ),
             ) from exc
@@ -256,6 +266,33 @@ def _hf_offline(enabled: bool):
             os.environ["HF_HUB_OFFLINE"] = prior_env
         if constants is not None:
             constants.HF_HUB_OFFLINE = prior_const
+
+
+# Slow links need more than huggingface_hub's 10s default read-timeout for the
+# multi-GB Parakeet/Whisper weights, or a single chunk read raises "The read
+# operation timed out" mid-download. Raise the floor to 60s while honoring any
+# value the user already set (via env or the live constant).
+_DOWNLOAD_TIMEOUT_FLOOR = "60"
+
+
+def _ensure_download_timeout() -> None:
+    """Bump huggingface_hub's download read-timeout floor for large weights.
+
+    Sets the env var (covers fresh/forked subprocesses and the not-yet-imported
+    case) and, since the constant is frozen from the env at import time but read
+    live at download time, also bumps the live constant — but only when it is
+    still at the default, so an explicit user value is never lowered. Touches
+    nothing offline-related, so the ``local_files_only`` path stays network-free.
+    """
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", _DOWNLOAD_TIMEOUT_FLOOR)
+    try:
+        from huggingface_hub import constants
+
+        default = getattr(constants, "DEFAULT_DOWNLOAD_TIMEOUT", 10)
+        if default >= constants.HF_HUB_DOWNLOAD_TIMEOUT:
+            constants.HF_HUB_DOWNLOAD_TIMEOUT = int(_DOWNLOAD_TIMEOUT_FLOOR)
+    except Exception:  # pragma: no cover - defensive; hf_hub ships with both backends
+        return
 
 
 # --- Whisper (faster-whisper) backend ------------------------------------
@@ -317,6 +354,7 @@ def _load_whisper(model_size: str, *, local_files_only: bool):
             "faster-whisper is not installed.",
             hint="Reinstall hearsay so transcription support is available.",
         ) from exc
+    _ensure_download_timeout()
     try:
         return WhisperModel(
             model_size,
