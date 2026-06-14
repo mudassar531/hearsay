@@ -127,7 +127,7 @@ def ingest_youtube_transcribe(
     return assemble_document(
         meta,
         result.segments,
-        method=f"whisper-{result.model_size}",
+        method=result.method,
         language=result.language,
         ingested_at=now(),
     )
@@ -171,7 +171,7 @@ def ingest_file(
     return assemble_document(
         meta,
         result.segments,
-        method=f"whisper-{result.model_size}",
+        method=result.method,
         language=result.language,
         ingested_at=now(),
     )
@@ -218,7 +218,7 @@ def ingest_episode(
     return assemble_document(
         meta,
         result.segments,
-        method=f"whisper-{result.model_size}",
+        method=result.method,
         language=result.language,
         ingested_at=now(),
     )

@@ -119,6 +119,7 @@ def _fake_transcription(model_size: str) -> TranscriptionResult:
         language="en",
         duration_s=8.0,
         model_size=model_size,
+        method=f"whisper-{model_size}",
     )
 
 
