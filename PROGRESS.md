@@ -342,12 +342,44 @@ New, additive mode (`hearsay dataset <SOURCE>`). Design + citations: `docs/datas
 
 ## PHASE D1 — Core segmentation engine (the heart)
 
-- [ ] Engine-agnostic `Word` model + adapters: faster-whisper `Word(word,start,end,probability)` and merged Parakeet tokens (split on literal leading space)
-- [ ] Add opt-in `word_timestamps` capture to `transcribe.py` (default off → existing behavior, JSON schema, and markdown output all unchanged)
-- [ ] Pure `dataset/segmentation.py`: words → `DatasetSegment`s — cut on sentence/pause boundaries, clamp to `[--segment-min, --segment-max]`, never split mid-word, repair inverted spans, attach exact start/end + verbatim text
-- [ ] Heavy unit tests on fixtures: long sentences, no punctuation, tiny gaps, inverted (`start>end`) spans, one-huge-segment, empty input
+- [x] Engine-agnostic `Word` model + adapters: faster-whisper `Word(word,start,end,probability)` and merged Parakeet tokens (split on literal leading space) — verified: `Word` in `models.py` (frozen), adapters in `dataset/words.py`; 13 adapter tests pass (merge, blank/None drop, clamp, geometric-mean confidence, defensive timings)
+- [x] Add opt-in `word_timestamps` capture to `transcribe.py` (default off → existing behavior, JSON schema, and markdown output all unchanged) — verified: `TranscriptionResult.words` (default None); whisper requests word timings + parakeet merges tokens only when asked; tiny-model test captures fox/dog words; schema-sync test still passes
+- [x] Pure `dataset/segmentation.py`: words → `DatasetSegment`s — cut on sentence/pause boundaries, clamp to `[min_s, max_s]`, never split mid-word, repair inverted spans, attach exact start/end + verbatim text — verified: greedy pause-primary (chosen via a 3-design judge panel; see DECISIONS); spans use range *extent* so a glitched interior word can't hide
+- [x] Heavy unit tests: long sentences, no punctuation, tiny gaps, inverted/overlapping/out-of-order/NaN spans, one-huge-word, empty input, tiny-tail merge/isolate/rebalance, determinism, plus a 400-case property/fuzz pass over noisy inputs — verified: 34 segmentation tests pass offline
 
-**Acceptance:** segmentation tests pass offline; segments are lossless w.r.t. input words, never cut mid-word, all within `[min,max]` (or flagged when a single word exceeds max). **STOP.**
+**Acceptance:** segmentation tests pass offline; segments are lossless w.r.t. input words, never cut mid-word, all within `[min,max]` (or flagged when a single word exceeds max).
+
+### Phase D1 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The segmentation algorithm
+was chosen via a 3-candidate judge panel (pause-primary / sentence-first / DP) whose
+adversarial critic caught a real design bug — an endpoint-only duration let a glitched
+interior word hide and "launder" the `oversized` flag — fixed by computing every clip's
+span from its **range extent**. An independent 4-lens implementation review then
+adversarially verified the code: **zero real bugs** (the one substantive segmentation
+finding was confirmed *not-a-bug* — tiny-tail merge across a pause is the intended D1
+contract; internal-silence drop is a D3 filter), and 7 quality improvements were applied
+(dead-constant removal, `target_s` NaN guard, geometric-mean Parakeet confidence,
+defensive timing coercion, doc wording).
+
+```text
+$ uv run pytest tests/test_dataset_segmentation.py tests/test_dataset_words.py tests/test_transcribe.py
+54 passed in 3.90s
+
+$ uv run pytest            # full suite — existing behaviour unchanged
+218 passed in 8.10s
+
+$ uv run ruff check . && uv run mypy
+All checks passed!
+Success: no issues found in 38 source files
+```
+
+Invariants asserted by the property/fuzz test (400 noisy random inputs incl.
+NaN/inf/inverted/overlapping/out-of-order spans, blanks, degenerate params): lossless
+partition by identity & order, never mid-word, non-negative monotone spans, span =
+true extent of its words, `oversized` iff duration > max_s, no empty segments, and
+determinism. The markdown/JSON path is untouched (`word_timestamps` defaults False;
+`docs/schema.json` unchanged).
 
 ## PHASE D2 — Audio export + manifest
 
