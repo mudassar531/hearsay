@@ -1,14 +1,43 @@
 [project]
 name = "hearsay"
-version = "0.1.0"
+version = "0.2.0"
 description = "crawl4ai for video & audio — turn any YouTube video, podcast episode, or local recording into clean, timestamped, LLM-ready markdown"
 readme = "README.md"
 authors = [
     { name = "Mudassar Awan", email = "mudassar.awan@snapdev.ai" }
 ]
+maintainers = [
+    { name = "Mudassar Awan", email = "mudassar.awan@snapdev.ai" }
+]
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = [
+    "transcription",
+    "whisper",
+    "parakeet",
+    "mlx",
+    "youtube",
+    "podcast",
+    "speech-to-text",
+    "subtitles",
+    "markdown",
+    "rag",
+    "llm",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Environment :: Console",
+]
 dependencies = [
     "faster-whisper>=1.2.1",
     "feedparser>=6.0.12",
@@ -17,6 +46,11 @@ dependencies = [
     "youtube-transcript-api>=1.2.4",
     "yt-dlp>=2026.6.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mudassar531/hearsay"
+Repository = "https://github.com/mudassar531/hearsay"
+Issues = "https://github.com/mudassar531/hearsay/issues"
 
 [project.scripts]
 hearsay = "hearsay.cli:app"
@@ -40,7 +74,7 @@ dev = [
     "mcp>=1.2",
     "mypy>=2.1.0",
     "parakeet-mlx>=0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "pytest>=9.0.3",
+    "pytest>=9.1.0",
     "ruff>=0.15.17",
 ]
 

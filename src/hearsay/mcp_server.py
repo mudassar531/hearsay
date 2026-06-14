@@ -9,6 +9,8 @@ the agent host's server config):
   HEARSAY_MODEL   transcription model: auto (default; Parakeet on Apple Silicon,
                   else whisper-small), a parakeet alias, or a whisper size
   HEARSAY_LANG    default language code (default: English captions / auto-detect)
+  HEARSAY_VAD     voice-activity filter: 1 (default, speech); 0/false/no for music
+  HEARSAY_PARAKEET_MODEL  override the Parakeet MLX repo id (advanced)
 """
 
 import os

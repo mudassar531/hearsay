@@ -5,12 +5,13 @@ stays offline: it transcribes the committed sample clip if the model is cached,
 and skips cleanly otherwise (e.g. fresh CI before a model-cache step).
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
 from hearsay.errors import TranscriptionError
-from hearsay.transcribe import transcribe_audio
+from hearsay.transcribe import _ensure_download_timeout, transcribe_audio
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE = FIXTURES / "sample.wav"
@@ -21,6 +22,34 @@ def test_unknown_model_raises_friendly_error() -> None:
         transcribe_audio(SAMPLE, model_size="enormous")
     assert "enormous" in excinfo.value.message
     assert excinfo.value.hint
+
+
+def test_ensure_download_timeout_raises_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # With nothing set, the floor is raised above huggingface_hub's 10s default
+    # (which caused real "read operation timed out" failures on multi-GB weights).
+    from huggingface_hub import constants
+
+    monkeypatch.delenv("HF_HUB_DOWNLOAD_TIMEOUT", raising=False)
+    default = getattr(constants, "DEFAULT_DOWNLOAD_TIMEOUT", 10)
+    monkeypatch.setattr(constants, "HF_HUB_DOWNLOAD_TIMEOUT", default)
+
+    _ensure_download_timeout()
+
+    assert int(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"]) >= 60
+    assert constants.HF_HUB_DOWNLOAD_TIMEOUT >= 60
+
+
+def test_ensure_download_timeout_preserves_user_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A user-provided, higher value must never be lowered.
+    from huggingface_hub import constants
+
+    monkeypatch.setenv("HF_HUB_DOWNLOAD_TIMEOUT", "300")
+    monkeypatch.setattr(constants, "HF_HUB_DOWNLOAD_TIMEOUT", 300)
+
+    _ensure_download_timeout()
+
+    assert os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] == "300"
+    assert constants.HF_HUB_DOWNLOAD_TIMEOUT == 300
 
 
 def test_transcribe_sample_with_tiny() -> None:
