@@ -2,23 +2,69 @@
 
 > **crawl4ai for video & audio.** One command turns any YouTube video, podcast
 > episode, or local recording into clean, timestamped, chunked, LLM-ready
-> markdown — for RAG pipelines and AI agents.
+> markdown — for RAG pipelines, notes, and AI agents.
 
 [![PyPI](https://img.shields.io/pypi/v/hearsay)](https://pypi.org/project/hearsay/)
 [![CI](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml/badge.svg)](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-![hearsay in action](demo/demo.gif)
+<table>
+  <tr>
+    <td width="50%" valign="top" align="center">
+      <b>Command line</b> — for pipelines &amp; automation<br><br>
+      <img src="demo/demo.gif" alt="hearsay on the command line" width="100%">
+    </td>
+    <td width="50%" valign="top" align="center">
+      <b>Web UI</b> — <code>hearsay web</code>, in your browser<br><br>
+      <img src="demo/webui.gif" alt="hearsay web UI" width="100%">
+    </td>
+  </tr>
+</table>
+
+Same engine, two front ends — use whichever fits. Paste a link, get back
+markdown a human *and* a model can read: readable
+paragraphs, real timestamps, chapter headings, and an optional JSON sidecar with
+a stable schema. Captions when they exist (fast, no download); local Whisper or
+Apple-Silicon **Parakeet** transcription when they don't.
+
+```bash
+uv tool install hearsay
+hearsay "https://www.youtube.com/watch?v=VIDEO_ID"   # → ./VIDEO_ID.md
+```
+
+- [Two ways to use it](#two-ways-to-use-it)
+- [Why](#why) · [Install](#install) · [Transcription engines](#transcription-engines)
+- [Quickstart](#quickstart) · [Web UI](#web-ui) · [What you get](#what-you-get)
+- [How it compares](#how-it-compares) · [Give your agent ears (MCP)](#give-your-agent-ears)
+- [CLI reference](#cli-reference) · [Requirements](#requirements) · [Contributing](#contributing)
+
+## Two ways to use it
+
+**Command line** — for pipelines, batches, and automation:
+
+```bash
+hearsay "https://youtu.be/VIDEO_ID" --json        # markdown + JSON sidecar
+hearsay "https://example.com/feed.xml" --all      # batch a whole podcast feed
+```
+
+**Web UI** — for a browser: run `hearsay web`, paste a URL or drop in a file, and
+watch the clean markdown appear with a live preview, copy, and download. It's a
+single self-contained page with **no extra dependencies** (Python standard
+library only). See it in action up top, and [details below](#web-ui).
 
 ## Why
 
 Getting a transcript into your RAG pipeline usually means gluing together
 `yt-dlp`, Whisper, and a pile of timestamp-wrangling scripts — and you still end
 up with one line per caption fragment or an undifferentiated wall of text.
-hearsay does the whole thing in one command and gives you back markdown a human
-*and* a model can read: readable paragraphs, real timestamps, chapter headings,
-and an optional JSON sidecar with a stable schema.
+hearsay does the whole thing in one command:
+
+- **Captions-first.** Uses YouTube captions when available — fast, no media download.
+- **Falls back to transcription** automatically (local Whisper, or Parakeet on Apple Silicon) when there are none.
+- **Readable output.** Caption fragments are regrouped into real paragraphs (40–120 words) split on pauses and sentence boundaries — never one line per fragment, never a wall of text.
+- **Structured.** Chapters become `##` sections (or ~5-minute time windows), every paragraph keeps a `[hh:mm:ss]` timestamp, and `--json` emits a sidecar with a stable schema.
+- **Scales.** Single videos, whole YouTube playlists, and podcast RSS feeds — batch into a folder, continuing past per-item failures.
 
 ## Install
 
@@ -26,28 +72,16 @@ and an optional JSON sidecar with a stable schema.
 uv tool install hearsay          # recommended
 # or
 pipx install hearsay
-# MCP server support:
-uv tool install "hearsay[mcp]"
-# Apple Silicon: add the fast Parakeet engine (~3x faster than CPU Whisper):
-uv tool install "hearsay[parakeet]"
+```
+
+Optional extras:
+
+```bash
+uv tool install "hearsay[mcp]"        # MCP server, for AI agents
+uv tool install "hearsay[parakeet]"   # fast Apple-Silicon engine (macOS arm64)
 ```
 
 **System requirement:** [ffmpeg](#requirements) on your PATH.
-
-### Transcription engines
-
-hearsay transcribes with the fastest engine your machine has. The default
-`--model auto` picks:
-
-- **Parakeet** (NVIDIA Parakeet-TDT on Apple's MLX) on Apple Silicon when the
-  `parakeet` extra is installed — about **3× faster** than `whisper-small` on
-  CPU (~24× vs ~7× realtime on an M1 Pro), with comparable accuracy. `parakeet`
-  is multilingual (25 European languages); `parakeet-en` is English-only.
-- **Whisper** (faster-whisper, CPU int8) everywhere else, or when you pass an
-  explicit size (`tiny`…`large-v3`).
-
-If the Parakeet extra isn't installed, `auto` falls back to `whisper-small`
-automatically, so hearsay works the same everywhere — it's just faster on a Mac.
 
 <details>
 <summary>From source (for development)</summary>
@@ -60,7 +94,24 @@ uv sync && uv run hearsay --help    # or: uv tool install .
 
 </details>
 
-## 30-second quickstart
+## Transcription engines
+
+When a video has no captions (or you pass `--transcribe`), hearsay transcribes
+locally with the fastest engine your machine has. The default `--model auto`
+picks:
+
+| Engine | When | Speed | Notes |
+| --- | --- | --- | --- |
+| **Parakeet** (NVIDIA Parakeet-TDT on Apple MLX) | Apple Silicon + `parakeet` extra | ~24× realtime (M1 Pro) | `parakeet` is multilingual (25 European languages); `parakeet-en` is English-only |
+| **Whisper** (faster-whisper, CPU int8) | everywhere else, or an explicit size | ~7× realtime | sizes `tiny`…`large-v3`; `large-v3` is the multilingual ceiling |
+
+On Apple Silicon, Parakeet is about **3× faster** than `whisper-small` at
+comparable accuracy. If the `parakeet` extra isn't installed, `auto` falls back
+to `whisper-small` automatically — so hearsay behaves the same everywhere, just
+faster on a Mac. Models download once (Whisper: tens of MB to ~1.5 GB; Parakeet
+v3: ~2.5 GB) and are cached for offline use.
+
+## Quickstart
 
 ```bash
 # YouTube → markdown via captions (fast — no download)
@@ -81,6 +132,28 @@ hearsay "https://example.com/feed.xml" --all --limit 3 --output-dir ./out
 ```
 
 No captions on a video? hearsay falls back to local transcription automatically.
+
+## Web UI
+
+Prefer a browser? `hearsay web` starts a tiny local web UI — paste a YouTube URL
+or attach an audio/video file, pick the model, and get a live markdown preview
+with copy, download, and a history of past transcripts. It's a single
+self-contained page built on the Python standard library, with **no extra
+dependencies**, and it binds to `127.0.0.1` so nothing leaves your machine.
+
+```bash
+hearsay web                      # → http://localhost:8756
+hearsay web --port 9000          # custom port
+hearsay web --host 0.0.0.0       # expose on your LAN (unauthenticated — careful)
+```
+
+1. Run `hearsay web` and open the printed URL.
+2. Paste a YouTube link (or click **Attach** to upload a file).
+3. Optionally tick **Force transcription**, toggle **VAD**, or pick a model.
+4. Hit send — the transcript renders with **Copy** / **Download** buttons.
+
+Single video URLs and file uploads go through the UI; for playlists and podcast
+feeds, use the CLI (the UI shows a friendly hint).
 
 ## What you get
 
@@ -105,6 +178,10 @@ the right place. But, before we begin this lesson in political power, ask
 yourself, why don't rulers see as clearly as you...
 ```
 
+The `method` field records exactly how the text was produced — `captions`,
+`captions-auto`, `whisper-small`, `parakeet-tdt-0.6b-v3`, etc. — so a downstream
+consumer can tell a human transcript from a machine one.
+
 Pass `--json` for a sidecar matching the [`Transcript` schema](docs/schema.json):
 metadata plus `chunks[]`, each with `start_s`, `end_s`, `section`, and `text` —
 ready to embed.
@@ -119,26 +196,13 @@ ready to embed.
 | Timestamps + paragraph grouping | ✅ readable | ✗ raw segments | n/a |
 | Chapters → sections | ✅ | ✗ manual | n/a |
 | Podcasts · playlists · batch | ✅ | ✗ manual | ✗ |
+| Fast Apple-Silicon engine | ✅ Parakeet (MLX) | ✗ DIY | n/a |
 | JSON sidecar for RAG | ✅ stable schema | ✗ manual | varies |
-| MCP server for agents | ✅ | ✗ | varies |
+| Browser UI + MCP server | ✅ | ✗ | varies |
 
 hearsay does **media**; document tools like
 [markitdown](https://github.com/microsoft/markitdown) and
 [docling](https://github.com/docling-project/docling) do **documents**. Use both.
-
-## Web UI
-
-Prefer a browser? `hearsay web` starts a tiny local web UI — paste a YouTube URL
-or drop in an audio/video file, pick the model, and get a live markdown preview
-with copy and download. It's a single self-contained page with **no extra
-dependencies** (built on the standard library).
-
-```bash
-hearsay web                      # → http://localhost:8756
-hearsay web --port 9000          # custom port
-```
-
-(Single video URLs and file uploads; for playlists and podcast feeds use the CLI.)
 
 ## Give your agent ears
 
@@ -205,7 +269,7 @@ Server configuration (env vars, since MCP tool signatures are fixed):
 > **Speech vs. music:** hearsay is tuned for spoken audio (podcasts, talks,
 > interviews, meetings), where transcription is accurate. For music, pass
 > `--no-vad` so the vocals aren't discarded — but expect a rough, approximate
-> lyric transcript, since Whisper is a speech model, not a lyrics transcriber.
+> lyric transcript, since these are speech models, not lyrics transcribers.
 
 ## CLI reference
 
