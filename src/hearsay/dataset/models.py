@@ -59,6 +59,30 @@ class DatasetClip(BaseModel):
     speaker: str | None = None  # set by optional diarization (Phase D5)
 
 
+class FilterConfig(BaseModel):
+    """Quality-filter thresholds (Tier-1 default-on, dep-free; Tier-2 opt-in).
+
+    All operate on data hearsay already has — clip duration, word timings, the
+    transcript — so the default set needs no audio decode and no new dependency.
+    ``min_avg_confidence`` is an engine-agnostic stand-in for Whisper's
+    ``avg_logprob``/``no_speech_prob`` (linear word probability; ~0.30 ≈
+    ``avg_logprob`` -1.0), since clips are re-grouped from words and Parakeet
+    exposes no segment-level decoding signals (see DECISIONS).
+    """
+
+    enabled: bool = True
+    min_duration_s: float = 1.0
+    max_duration_s: float = 15.0
+    max_internal_gap_s: float = 2.0  # an internal silence this long = a join of two utterances
+    max_compression_ratio: float = 2.4  # gzip-ratio repetition guard (Whisper's threshold)
+    min_avg_confidence: float = 0.30  # mean word confidence floor (~avg_logprob -1.0)
+    min_chars_per_s: float = 5.0
+    max_chars_per_s: float = 25.0
+    target_language: str = "en"
+    require_target_script: bool = True  # drop clips whose text is mostly the wrong script
+    detect_clipping: bool = False  # Tier-2: read the WAV and drop clipped clips (opt-in)
+
+
 class DatasetConfig(BaseModel):
     """Knobs for a dataset build."""
 
@@ -67,6 +91,17 @@ class DatasetConfig(BaseModel):
     sample_rate: int = Field(default=22050, gt=0)
     segment_min_s: float = Field(default=1.0, gt=0)
     segment_max_s: float = Field(default=15.0, gt=0)
+    filters: FilterConfig = Field(default_factory=FilterConfig)
+
+
+class DropRecord(BaseModel):
+    """One filtered-out clip, with the failing filter and the measured value."""
+
+    clip: str  # Tier-1: a segment-order ref ("<id>_segNNNN"); Tier-2: the final clip id
+    filter: str  # the failing filter name — the drop reason
+    value: str  # the measured value, formatted
+    threshold: str  # the threshold it failed against, formatted
+    text: str  # short transcript preview (for eyeballing)
 
 
 class BuildReport(BaseModel):
@@ -82,3 +117,6 @@ class BuildReport(BaseModel):
     formats: list[str]
     files: list[str] = Field(default_factory=list)  # index/card files written, relative
     clips: list[DatasetClip] = Field(default_factory=list)
+    dropped_count: int = 0
+    drops_by_reason: dict[str, int] = Field(default_factory=dict)
+    drops: list[DropRecord] = Field(default_factory=list)

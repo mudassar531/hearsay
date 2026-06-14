@@ -26,7 +26,7 @@ import json
 import re
 from pathlib import Path
 
-from hearsay.dataset.models import BuildReport, DatasetClip
+from hearsay.dataset.models import BuildReport, DatasetClip, DropRecord
 from hearsay.models import SourceMetadata
 from hearsay.timefmt import format_timestamp
 
@@ -86,6 +86,14 @@ _WRITERS = {
 def write_indices(out_dir: Path, clips: list[DatasetClip], formats: list[str]) -> list[str]:
     """Write each requested index format; return the relative filenames written."""
     return [_WRITERS[fmt](out_dir, clips) for fmt in formats if fmt in _WRITERS]
+
+
+def write_dropped(out_dir: Path, drops: list[DropRecord]) -> str:
+    """Write the per-clip drop log ``dropped.jsonl`` (one record per line). Returns its name."""
+    lines = [json.dumps(d.model_dump(), ensure_ascii=False) for d in drops]
+    body = "\n".join(lines)
+    (out_dir / "dropped.jsonl").write_text(body + ("\n" if body else ""), encoding="utf-8")
+    return "dropped.jsonl"
 
 
 def _size_category(n: int) -> str:
