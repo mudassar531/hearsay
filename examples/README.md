@@ -15,3 +15,31 @@ uv run hearsay "https://www.youtube.com/watch?v=zjkBMFhNj_g" -o examples/zjkBMFh
 
 The `ingested` timestamp in the frontmatter changes on each run; everything
 else is reproducible.
+
+## Dataset mode
+
+[`dataset/`](dataset/) is a tiny **TTS/STT training dataset** built with
+`hearsay dataset`, so you can see the output shape without running anything. Its
+source is [`tests/fixtures/sample.wav`](../tests/fixtures/sample.wav) — a ~4.7 s
+synthetic clip from macOS `say`, **not** a real person's voice, so there are no
+rights or consent concerns in redistributing it (the generated `dataset_card.md`
+carries the generic rights/consent template that applies to real media). Regenerate with:
+
+```bash
+uv run hearsay dataset tests/fixtures/sample.wav --out examples/dataset \
+  --sample-rate 16000 --segment-min 1 --segment-max 12 \
+  --format ljspeech --format jsonl --format hf
+```
+
+| File | What it is |
+| --- | --- |
+| [`dataset/wavs/`](dataset/wavs/) | The sliced clips — mono 16-bit PCM WAV, cut on word timestamps, never mid-word |
+| [`dataset/metadata.csv`](dataset/metadata.csv) | LJSpeech index (`id\|text\|text`) — Coqui / Piper read this directly |
+| [`dataset/manifest.jsonl`](dataset/manifest.jsonl) | NeMo/ESPnet manifest (`audio_filepath`, `duration`, `text`, `offset`) |
+| [`dataset/metadata.jsonl`](dataset/metadata.jsonl) | HuggingFace `audiofolder` index (`file_name`, `transcription`) |
+| [`dataset/dataset_card.md`](dataset/dataset_card.md) | Provenance, counts, language, and a rights/consent note |
+| [`dataset/dropped.jsonl`](dataset/dropped.jsonl) | Every filtered-out clip with its reason (empty here — nothing was dropped) |
+
+The transcript is real ASR output: `dog?` (vs the script's `dog.`) is the model's
+own punctuation guess, left verbatim. The `generated`/`retrieval_date` fields in the
+card change on each run; everything else is reproducible.
