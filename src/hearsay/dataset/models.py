@@ -120,3 +120,35 @@ class BuildReport(BaseModel):
     dropped_count: int = 0
     drops_by_reason: dict[str, int] = Field(default_factory=dict)
     drops: list[DropRecord] = Field(default_factory=list)
+
+
+class SourceResult(BaseModel):
+    """The outcome of one source (playlist video / feed episode) in a combined build."""
+
+    source_id: str
+    label: str
+    ok: bool
+    clip_count: int = 0
+    duration_s: float = 0.0
+    dropped: int = 0
+    error: str | None = None
+
+
+class CombinedReport(BaseModel):
+    """Summary of a combined build merging many sources into one dataset."""
+
+    out_dir: str
+    source: str  # the playlist/feed URL (or a label)
+    title: str
+    clip_count: int
+    total_duration_s: float
+    oversized_count: int
+    dropped_count: int
+    drops_by_reason: dict[str, int] = Field(default_factory=dict)
+    sample_rate: int
+    language: str
+    formats: list[str]
+    files: list[str] = Field(default_factory=list)
+    sources: list[SourceResult] = Field(default_factory=list)
+    succeeded: int = 0
+    failed: int = 0
