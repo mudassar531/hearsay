@@ -611,10 +611,59 @@ status 200 · dataset True · clips 1 · zip contains:
 
 ## PHASE D7 — Launch-ready polish
 
-- [ ] End-to-end fresh-run test following only the README; CI green
-- [ ] Tiny, license-clean example mini-dataset committed so people see the output shape
-- [ ] Draft a short "what's new in v0.2" note
-- [ ] Final summary: what shipped, what's blocked, sample dataset stats, suggested next ideas. **STOP.**
+- [x] End-to-end fresh-run test following only the README; CI green locally — `uv sync --frozen` exit 0, `ruff`/`format`/`mypy` clean, **309 tests pass offline**, every documented `hearsay dataset` flag exists, and the documented happy-path command runs and produces the documented folder shape
+- [x] Tiny, license-clean example mini-dataset committed (`examples/dataset/`, built from the synthetic `say` fixture; all three index formats) so people see the output shape without running anything
+- [x] Short "what's new in v0.2" note — `CHANGELOG.md` (Keep a Changelog style)
+- [x] Final summary: what shipped, what's blocked, sample dataset stats, suggested next ideas (below)
+
+**Acceptance:** README path verified end-to-end; CI steps green locally; example dataset committed and link-clean on a fresh clone.
+
+### Phase D7 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg 8.1). A 4-lens
+adversarial launch review (docs-accuracy / example-integrity / CI-fresh-install /
+changelog-honesty), each finding independently verified, returned **2 confirmed
+issues — both fixed before this gate**: (1) *blocker* — `examples/dataset/` was
+untracked, so the committed `examples/README.md` links would 404 on a fresh clone
+→ committed all six paths (incl. the 0-byte `dropped.jsonl`), verified in `HEAD`;
+(2) *minor* — CHANGELOG called `detect_clipping` "stdlib only" though it uses numpy
+(a faster-whisper transitive dep) → corrected the wording. The other lenses
+confirmed the README/output-shape claims, the example's internal consistency
+(WAV mono/16-bit PCM @ 16 kHz; manifest duration == probed duration; transcript
+byte-identical across all three indices), and that CI is offline + ffmpeg-only with
+the diarize extra kept out of the default install.
+
+```text
+$ uv sync --frozen            # CI step — lock in sync with pyproject
+exit 0
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   54 files already formatted   Success: no issues found in 51 source files
+
+$ uv run pytest               # offline; whisper-gated tests skip when no model cached
+309 passed in 19.29s
+
+# Fresh README run — the documented dataset command on the license-clean fixture
+$ uv run hearsay dataset tests/fixtures/sample.wav --out examples/dataset \
+    --sample-rate 16000 --segment-min 1 --segment-max 12 \
+    --format ljspeech --format jsonl --format hf
+✓ 1 clips · 00:00:04 · dropped 0 · → examples/dataset/
+
+$ ls examples/dataset/        # matches the README's documented folder shape
+dataset_card.md  dropped.jsonl  manifest.jsonl  metadata.csv  metadata.jsonl  wavs/
+
+$ git ls-tree -r HEAD --name-only examples/dataset/   # link-clean on a fresh clone
+examples/dataset/dataset_card.md
+examples/dataset/dropped.jsonl
+examples/dataset/manifest.jsonl
+examples/dataset/metadata.csv
+examples/dataset/metadata.jsonl
+examples/dataset/wavs/sample_0001.wav
+```
+
+**Example dataset stats:** 1 clip · 4.64 s · en · mono 16-bit PCM @ 16 kHz ·
+0 dropped · 164 KB total. Transcript is real ASR output (`dog?` vs the script's
+`dog.` is the model's own punctuation guess, left verbatim).
 
 ## Blockers
 
