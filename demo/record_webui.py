@@ -45,12 +45,12 @@ def main() -> None:
         )
         page = ctx.new_page()
         page.goto(PAGE_URL, wait_until="networkidle")
-        time.sleep(1.3)  # let the hero render
+        time.sleep(1.0)  # let the hero render
 
         # Type a YouTube URL the way a person would, then send.
         page.locator("#input").click()
-        page.locator("#input").press_sequentially(VIDEO_URL, delay=42)
-        time.sleep(0.7)
+        page.locator("#input").press_sequentially(VIDEO_URL, delay=38)
+        time.sleep(0.4)
         page.locator("#send").click()
 
         # Wait until the transcript markdown is actually rendered.
@@ -59,13 +59,11 @@ def main() -> None:
             " return m && m.innerText.trim().length > 80; }",
             timeout=90_000,
         )
-        time.sleep(1.6)  # let the reader take in the result
+        time.sleep(1.1)  # let the reader take in the result
 
         # Scroll through the transcript so the timestamps/paragraphs show.
-        page.mouse.wheel(0, 680)
+        page.mouse.wheel(0, 760)
         time.sleep(1.5)
-        page.mouse.wheel(0, 680)
-        time.sleep(1.7)
 
         ctx.close()  # finalises the webm
         browser.close()
