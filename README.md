@@ -26,11 +26,28 @@ and an optional JSON sidecar with a stable schema.
 uv tool install hearsay          # recommended
 # or
 pipx install hearsay
-# transcription + MCP server support:
+# MCP server support:
 uv tool install "hearsay[mcp]"
+# Apple Silicon: add the fast Parakeet engine (~3x faster than CPU Whisper):
+uv tool install "hearsay[parakeet]"
 ```
 
 **System requirement:** [ffmpeg](#requirements) on your PATH.
+
+### Transcription engines
+
+hearsay transcribes with the fastest engine your machine has. The default
+`--model auto` picks:
+
+- **Parakeet** (NVIDIA Parakeet-TDT on Apple's MLX) on Apple Silicon when the
+  `parakeet` extra is installed — about **3× faster** than `whisper-small` on
+  CPU (~24× vs ~7× realtime on an M1 Pro), with comparable accuracy. `parakeet`
+  is multilingual (25 European languages); `parakeet-en` is English-only.
+- **Whisper** (faster-whisper, CPU int8) everywhere else, or when you pass an
+  explicit size (`tiny`…`large-v3`).
+
+If the Parakeet extra isn't installed, `auto` falls back to `whisper-small`
+automatically, so hearsay works the same everywhere — it's just faster on a Mac.
 
 <details>
 <summary>From source (for development)</summary>
@@ -49,11 +66,11 @@ uv sync && uv run hearsay --help    # or: uv tool install .
 # YouTube → markdown via captions (fast — no download)
 hearsay "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# Local audio/video → markdown via local Whisper (runs on CPU)
+# Local audio/video → markdown (fast Parakeet on Apple Silicon, else CPU Whisper)
 hearsay talk.mp3
 
-# Force Whisper on a YouTube URL, pick a model, also emit JSON
-hearsay "https://youtu.be/VIDEO_ID" --transcribe --model small --json
+# Force local transcription on a YouTube URL, pick an engine, also emit JSON
+hearsay "https://youtu.be/VIDEO_ID" --transcribe --model parakeet --json
 
 # Music/song? Add --no-vad so the lyrics aren't filtered out as "non-speech"
 hearsay "https://youtu.be/SONG_ID" --no-vad
@@ -63,7 +80,7 @@ hearsay "https://example.com/feed.xml"
 hearsay "https://example.com/feed.xml" --all --limit 3 --output-dir ./out
 ```
 
-No captions on a video? hearsay falls back to local Whisper automatically.
+No captions on a video? hearsay falls back to local transcription automatically.
 
 ## What you get
 
@@ -152,7 +169,7 @@ Edit Config; macOS: `~/Library/Application Support/Claude/`, Windows:
       "command": "hearsay",
       "args": ["mcp"],
       "env": {
-        "HEARSAY_MODEL": "small"
+        "HEARSAY_MODEL": "auto"
       }
     }
   }
@@ -166,9 +183,10 @@ Server configuration (env vars, since MCP tool signatures are fixed):
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `HEARSAY_MODEL` | `small` | Whisper model size (`tiny`…`large-v3`) |
-| `HEARSAY_LANG` | _(unset)_ | Default language: English captions, else Whisper auto-detect |
-| `HEARSAY_VAD` | `1` | Voice-activity filter; set `0` for music/songs |
+| `HEARSAY_MODEL` | `auto` | `auto`, `parakeet`, `parakeet-en`, or a Whisper size (`tiny`…`large-v3`) |
+| `HEARSAY_LANG` | _(unset)_ | Default language: English captions, else transcription auto-detect |
+| `HEARSAY_VAD` | `1` | Voice-activity filter (Whisper); set `0` for music/songs |
+| `HEARSAY_PARAKEET_MODEL` | _(unset)_ | Override the Parakeet MLX repo id (advanced) |
 
 > **Speech vs. music:** hearsay is tuned for spoken audio (podcasts, talks,
 > interviews, meetings), where transcription is accurate. For music, pass
@@ -183,9 +201,9 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   -o, --output PATH    Output file for a single source (default ./<id>.md)
   --output-dir PATH    Output directory for batch (playlist/feed) ingestion (default ./hearsay-out)
   --lang CODE          Language: captions default to English; transcription auto-detects
-  --transcribe         Force local Whisper even when captions exist
-  --model SIZE         Whisper model: tiny | base | small | medium | large-v3 (default small)
-  --no-vad             Disable voice-activity filtering (use for music/songs)
+  --transcribe         Force local transcription even when captions exist
+  --model MODEL        auto (default) | parakeet | parakeet-en | tiny | base | small | medium | large-v3
+  --no-vad             Disable voice-activity filtering (Whisper; use for music/songs)
   --json               Also write a .json sidecar (Transcript schema)
   --latest             Batch: ingest only the most recent item
   --episode N          Batch: ingest only item N (1-indexed)
@@ -211,8 +229,13 @@ hearsay mcp            Run the MCP stdio server
 | Windows (winget) | `winget install Gyan.FFmpeg` |
 | Windows (Chocolatey) | `choco install ffmpeg` |
 
-The first transcription downloads the chosen Whisper model once (tens of MB to
-~1.5 GB), then caches it for offline use.
+The first transcription downloads the chosen model once (Whisper: tens of MB to
+~1.5 GB; Parakeet: ~600 MB), then caches it for offline use.
+
+> **Apple Silicon speed:** the `parakeet` extra (`uv tool install
+> "hearsay[parakeet]"`) runs NVIDIA Parakeet on MLX, transcribing ~3× faster
+> than CPU Whisper (~24× realtime on an M1 Pro). It requires macOS on arm64; on
+> other platforms hearsay uses CPU Whisper automatically.
 
 ## Contributing
 
