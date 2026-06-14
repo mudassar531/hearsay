@@ -19,12 +19,14 @@ from pathlib import Path
 
 from hearsay import __version__
 from hearsay.dataset.audio import ensure_tools, probe_duration, slice_clip
+from hearsay.dataset.diarize import Diarizer, assign_speaker, dominant_speaker, load_diarizer
 from hearsay.dataset.filters import detect_clipping_drops, filter_segments
 from hearsay.dataset.formats import (
     write_combined_card,
     write_dataset_card,
     write_dropped,
     write_indices,
+    write_per_speaker_indices,
 )
 from hearsay.dataset.models import (
     DATASET_FORMATS,
@@ -33,6 +35,7 @@ from hearsay.dataset.models import (
     DatasetClip,
     DatasetConfig,
     DatasetSegment,
+    DiarizeConfig,
     DropRecord,
     SourceResult,
 )
@@ -62,6 +65,36 @@ _STATE_FILE = "_state.json"
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 # A clip shorter than this (after slicing) is a near-empty ffmpeg artifact, not audio.
 _MIN_CLIP_S = 0.01
+_MIXED_SPEAKER_WARNING = (
+    "diarization not installed: this dataset contains MIXED speakers — fine for STT, "
+    'but not single-voice TTS. Install "hearsay[diarize]" and set HF_TOKEN to enable '
+    "per-speaker / dominant-speaker export."
+)
+
+
+def _resolve_diarizer(
+    config: DatasetConfig, injected: Diarizer | None
+) -> tuple[Diarizer | None, list[str]]:
+    """Resolve the diarizer to use, degrading to a warning when the extra is absent.
+
+    An injected diarizer (tests) wins. Otherwise, if diarization is requested but
+    ``pyannote.audio`` is not installed, return ``(None, [warning])`` so the build
+    proceeds with a mixed-speaker dataset (SPEC: degrade cleanly). When it IS installed,
+    return a real diarizer; an auth/gating error then surfaces (actionably) on first use.
+    """
+    if injected is not None:
+        return injected, []
+    if not config.diarize.enabled:
+        return None, []
+    from importlib.util import find_spec
+
+    try:
+        available = find_spec("pyannote.audio") is not None
+    except (ImportError, ValueError):  # pragma: no cover - defensive
+        available = False
+    if not available:
+        return None, [_MIXED_SPEAKER_WARNING]
+    return load_diarizer(config.diarize), []
 
 
 def _utc_now_iso() -> str:
@@ -91,6 +124,7 @@ def build_dataset(
     config: DatasetConfig,
     language: str = "en",
     source_platform: str = "local",
+    diarizer: Diarizer | None = None,
     version: str = __version__,
     now: Callable[[], str] = _utc_now_iso,
 ) -> BuildReport:
@@ -103,14 +137,22 @@ def build_dataset(
     ensure_tools()
     _validate_formats(config.formats)
     _make_wavs_dir(config.out_dir)
+    diarizer, warnings = _resolve_diarizer(config, diarizer)
     source_id = _safe_id(meta.video_id or meta.title)
     clips, drops = _produce_clips(
-        source_audio, words, out_dir=config.out_dir, source_id=source_id, config=config
+        source_audio,
+        words,
+        out_dir=config.out_dir,
+        source_id=source_id,
+        config=config,
+        diarizer=diarizer,
     )
 
     out_dir = config.out_dir
     files = write_indices(out_dir, clips, config.formats)
     files.append(write_dropped(out_dir, drops))
+    if config.diarize.enabled and config.diarize.mode == "per_speaker":
+        files.extend(write_per_speaker_indices(out_dir, clips, config.formats))
     report = BuildReport(
         out_dir=str(out_dir),
         source=meta.source,
@@ -125,6 +167,7 @@ def build_dataset(
         dropped_count=len(drops),
         drops_by_reason=dict(Counter(d.filter for d in drops)),
         drops=drops,
+        warnings=warnings,
     )
     card = write_dataset_card(
         out_dir, report, meta, version=version, generated_at=now(), source_platform=source_platform
@@ -150,6 +193,7 @@ def _produce_clips(
     out_dir: Path,
     source_id: str,
     config: DatasetConfig,
+    diarizer: Diarizer | None = None,
 ) -> tuple[list[DatasetClip], list[DropRecord]]:
     """Segment, filter, and slice one source's audio into ``out_dir/wavs`` (no index write).
 
@@ -222,7 +266,54 @@ def _produce_clips(
     for drop in clip_drops:
         (out_dir / "wavs" / f"{drop.clip}.wav").unlink(missing_ok=True)
     drops.extend(clip_drops)
+
+    # Optional diarization: label each clip's speaker, drop cross-speaker clips, and
+    # (in dominant mode) keep only this source's most-spoken speaker.
+    if diarizer is not None and config.diarize.enabled:
+        clips, diar_drops = _assign_speakers(
+            clips, source_audio, out_dir, source_id, diarizer, config.diarize
+        )
+        drops.extend(diar_drops)
     return clips, drops
+
+
+def _assign_speakers(
+    clips: list[DatasetClip],
+    source_audio: Path,
+    out_dir: Path,
+    source_id: str,
+    diarizer: Diarizer,
+    dcfg: DiarizeConfig,
+) -> tuple[list[DatasetClip], list[DropRecord]]:
+    """Tag each clip with its dominant speaker; drop cross-speaker (and non-dominant) clips."""
+    turns = diarizer(source_audio)  # may raise DiarizationError (auth/gating) — actionable
+    keep_only = dominant_speaker(turns) if dcfg.mode == "dominant" else None
+    kept: list[DatasetClip] = []
+    drops: list[DropRecord] = []
+    for clip in clips:
+        speaker, purity = assign_speaker(clip.start_s, clip.end_s, turns)
+        reason: tuple[str, str, str] | None = None
+        if speaker is None:
+            reason = ("no_speaker", "0.00", ">0 overlap")
+        elif purity < dcfg.min_purity:
+            reason = ("cross_speaker", f"{purity:.2f}", f">={dcfg.min_purity}")
+        elif keep_only is not None and speaker != keep_only:
+            reason = ("non_dominant_speaker", speaker, keep_only)
+        if reason is not None:
+            (out_dir / clip.audio_path).unlink(missing_ok=True)
+            drops.append(
+                DropRecord(
+                    clip=clip.id,
+                    filter=reason[0],
+                    value=reason[1],
+                    threshold=reason[2],
+                    text=clip.text[:80],
+                )
+            )
+            continue
+        clip.speaker = f"{source_id}:{speaker}"  # namespace per source (labels are per-file)
+        kept.append(clip)
+    return kept, drops
 
 
 def build_dataset_from_file(
@@ -369,6 +460,9 @@ def _state_fingerprint(config: DatasetConfig) -> str:
             "segment_min_s": config.segment_min_s,
             "segment_max_s": config.segment_max_s,
             "filters": config.filters.model_dump(),
+            # diarization changes which clips survive / how they're labelled; the token
+            # is excluded (it doesn't change the output and shouldn't leak into state).
+            "diarize": {k: v for k, v in config.diarize.model_dump().items() if k != "hf_token"},
         },
         sort_keys=True,
     )
@@ -443,6 +537,7 @@ def build_combined_dataset(
     now: Callable[[], str] = _utc_now_iso,
     on_item: Callable[[int, int, DatasetSource], None] | None = None,
     resume: bool = True,
+    warnings: list[str] | None = None,
 ) -> CombinedReport:
     """Merge many sources into one dataset (shared ``wavs/`` + manifests).
 
@@ -508,6 +603,8 @@ def build_combined_dataset(
     # Remove orphan/stale WAVs so the on-disk tree matches the merged manifest exactly.
     _reconcile_wavs(out_dir, all_clips)
     files = _write_merged(out_dir, all_clips, all_drops, config.formats)
+    if config.diarize.enabled and config.diarize.mode == "per_speaker":
+        files.extend(write_per_speaker_indices(out_dir, all_clips, config.formats))
     report = CombinedReport(
         out_dir=str(out_dir),
         source=source,
@@ -521,6 +618,7 @@ def build_combined_dataset(
         language=language,
         formats=list(config.formats),
         sources=results,
+        warnings=warnings or [],
         succeeded=sum(1 for r in results if r.ok),
         failed=sum(1 for r in results if not r.ok),
     )
@@ -540,6 +638,7 @@ def _youtube_source(
     metadata_fetcher: MetadataFetcher,
     audio_downloader: AudioDownloader,
     transcriber: Transcriber,
+    diarizer: Diarizer | None = None,
 ) -> DatasetSource:
     def run(
         out_dir: Path, config: DatasetConfig, source_id: str
@@ -557,7 +656,12 @@ def _youtube_source(
             )
             words = _require_words(result)
             clips, drops = _produce_clips(
-                audio_path, words, out_dir=out_dir, source_id=source_id, config=config
+                audio_path,
+                words,
+                out_dir=out_dir,
+                source_id=source_id,
+                config=config,
+                diarizer=diarizer,
             )
         return clips, drops, meta
 
@@ -573,6 +677,7 @@ def _episode_source(
     vad_filter: bool,
     episode_downloader: EpisodeDownloader,
     transcriber: Transcriber,
+    diarizer: Diarizer | None = None,
 ) -> DatasetSource:
     def run(
         out_dir: Path, config: DatasetConfig, source_id: str
@@ -593,7 +698,12 @@ def _episode_source(
             )
             words = _require_words(result)
             clips, drops = _produce_clips(
-                audio_path, words, out_dir=out_dir, source_id=source_id, config=config
+                audio_path,
+                words,
+                out_dir=out_dir,
+                source_id=source_id,
+                config=config,
+                diarizer=diarizer,
             )
         meta = SourceMetadata(
             title=episode.title,
@@ -628,6 +738,7 @@ def build_dataset_from_playlist(
     title, entries = playlist_fetcher(url)
     if limit is not None:
         entries = entries[:limit]
+    diarizer, warnings = _resolve_diarizer(config, None)
     sources = [
         _youtube_source(
             entry,
@@ -637,6 +748,7 @@ def build_dataset_from_playlist(
             metadata_fetcher=metadata_fetcher,
             audio_downloader=audio_downloader,
             transcriber=transcriber,
+            diarizer=diarizer,
         )
         for entry in entries
     ]
@@ -651,6 +763,7 @@ def build_dataset_from_playlist(
         now=now,
         on_item=on_item,
         resume=resume,
+        warnings=warnings,
     )
 
 
@@ -675,6 +788,7 @@ def build_dataset_from_feed(
     episodes = list(feed.episodes)
     if limit is not None:
         episodes = episodes[:limit]
+    diarizer, warnings = _resolve_diarizer(config, None)
     sources = [
         _episode_source(
             episode,
@@ -684,6 +798,7 @@ def build_dataset_from_feed(
             vad_filter=vad_filter,
             episode_downloader=episode_downloader,
             transcriber=transcriber,
+            diarizer=diarizer,
         )
         for episode in episodes
     ]
@@ -698,4 +813,5 @@ def build_dataset_from_feed(
         now=now,
         on_item=on_item,
         resume=resume,
+        warnings=warnings,
     )

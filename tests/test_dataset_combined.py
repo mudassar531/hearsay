@@ -15,7 +15,7 @@ from hearsay.dataset.build import (
     build_combined_dataset,
     build_dataset_from_playlist,
 )
-from hearsay.dataset.models import DatasetConfig, FilterConfig
+from hearsay.dataset.models import DatasetConfig, DiarizeConfig, FilterConfig
 from hearsay.models import SourceMetadata, Word
 from hearsay.transcribe import TranscriptionResult
 from hearsay.youtube import PlaylistEntry
@@ -169,6 +169,16 @@ def test_combined_resume_invalidated_by_config_change(tmp_path: Path) -> None:
     cfg2 = cfg1.model_copy(update={"sample_rate": 22050})
     build_combined_dataset([_source("a", "A", calls=calls)], cfg2, title="M", source="s")
     assert calls == ["a", "a"]  # config changed -> source re-run, not served from state
+
+
+def test_combined_resume_invalidated_by_diarize_change(tmp_path: Path) -> None:
+    # Enabling diarization changes which clips survive, so it must invalidate resume.
+    calls: list = []
+    cfg1 = _config(tmp_path)  # diarize disabled
+    build_combined_dataset([_source("a", "A", calls=calls)], cfg1, title="M", source="s")
+    cfg2 = cfg1.model_copy(update={"diarize": DiarizeConfig(enabled=True, mode="tag")})
+    build_combined_dataset([_source("a", "A", calls=calls)], cfg2, title="M", source="s")
+    assert calls == ["a", "a"]  # diarize config changed -> source re-run
 
 
 def test_combined_no_resume_reruns_everything(tmp_path: Path) -> None:

@@ -56,3 +56,7 @@ class PlaylistError(HearsayError):
 
 class AudioExportError(HearsayError):
     """ffmpeg/ffprobe was unavailable or a clip could not be sliced/probed."""
+
+
+class DiarizationError(HearsayError):
+    """Speaker diarization could not run (extra not installed, model gated/unauthorized)."""

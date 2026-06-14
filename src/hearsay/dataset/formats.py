@@ -38,31 +38,34 @@ def _clean_pipe_text(text: str) -> str:
     return _WS.sub(" ", text.replace("|", " ")).strip()
 
 
-def write_ljspeech(out_dir: Path, clips: list[DatasetClip]) -> str:
-    """Write LJSpeech ``metadata.csv`` (``id|text|text``, no header). Returns its name."""
+def write_ljspeech(out_dir: Path, clips: list[DatasetClip], name: str = "metadata.csv") -> str:
+    """Write LJSpeech CSV (``id|text|text``, no header). Returns the filename."""
     lines = [f"{c.id}|{_clean_pipe_text(c.text)}|{_clean_pipe_text(c.text)}" for c in clips]
     body = "\n".join(lines)
-    (out_dir / "metadata.csv").write_text(body + ("\n" if body else ""), encoding="utf-8")
-    return "metadata.csv"
+    (out_dir / name).write_text(body + ("\n" if body else ""), encoding="utf-8")
+    return name
 
 
-def write_jsonl_manifest(out_dir: Path, clips: list[DatasetClip]) -> str:
-    """Write a NeMo-style ``manifest.jsonl``. Returns its name."""
-    lines = [
-        json.dumps(
-            {
-                "audio_filepath": c.audio_path,
-                "duration": round(c.duration_s, 3),
-                "text": c.text,
-                "offset": 0.0,
-            },
-            ensure_ascii=False,
-        )
-        for c in clips
-    ]
+def _manifest_obj(clip: DatasetClip) -> dict:
+    obj: dict = {
+        "audio_filepath": clip.audio_path,
+        "duration": round(clip.duration_s, 3),
+        "text": clip.text,
+        "offset": 0.0,
+    }
+    if clip.speaker is not None:  # NeMo manifests carry an optional speaker field
+        obj["speaker"] = clip.speaker
+    return obj
+
+
+def write_jsonl_manifest(
+    out_dir: Path, clips: list[DatasetClip], name: str = "manifest.jsonl"
+) -> str:
+    """Write a NeMo-style JSONL manifest (``manifest.jsonl`` by default). Returns its name."""
+    lines = [json.dumps(_manifest_obj(c), ensure_ascii=False) for c in clips]
     body = "\n".join(lines)
-    (out_dir / "manifest.jsonl").write_text(body + ("\n" if body else ""), encoding="utf-8")
-    return "manifest.jsonl"
+    (out_dir / name).write_text(body + ("\n" if body else ""), encoding="utf-8")
+    return name
 
 
 def write_hf_audiofolder(out_dir: Path, clips: list[DatasetClip]) -> str:
@@ -94,6 +97,36 @@ def write_dropped(out_dir: Path, drops: list[DropRecord]) -> str:
     body = "\n".join(lines)
     (out_dir / "dropped.jsonl").write_text(body + ("\n" if body else ""), encoding="utf-8")
     return "dropped.jsonl"
+
+
+_SLUG_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _speaker_slug(speaker: str) -> str:
+    """A filesystem-safe slug for a per-speaker index filename."""
+    return _SLUG_UNSAFE.sub("-", speaker).strip("-") or "unknown"
+
+
+def write_per_speaker_indices(
+    out_dir: Path, clips: list[DatasetClip], formats: list[str]
+) -> list[str]:
+    """Write a per-speaker index (over the shared ``wavs/``) for each speaker. Returns filenames.
+
+    Gives a drop-in single-voice corpus per speaker without duplicating audio:
+    ``manifest.<speaker>.jsonl`` (always) and ``metadata.<speaker>.csv`` (when LJSpeech
+    is requested), each listing only that speaker's clips.
+    """
+    by_speaker: dict[str, list[DatasetClip]] = {}
+    for clip in clips:
+        if clip.speaker is not None:
+            by_speaker.setdefault(clip.speaker, []).append(clip)
+    files: list[str] = []
+    for speaker, spk_clips in sorted(by_speaker.items()):
+        slug = _speaker_slug(speaker)
+        files.append(write_jsonl_manifest(out_dir, spk_clips, name=f"manifest.{slug}.jsonl"))
+        if "ljspeech" in formats:
+            files.append(write_ljspeech(out_dir, spk_clips, name=f"metadata.{slug}.csv"))
+    return files
 
 
 def _size_category(n: int) -> str:

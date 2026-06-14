@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from hearsay.models import Word
 
@@ -83,6 +83,34 @@ class FilterConfig(BaseModel):
     detect_clipping: bool = False  # Tier-2: read the WAV and drop clipped clips (opt-in)
 
 
+DIARIZE_MODES = ("tag", "dominant", "per_speaker")
+
+
+class DiarizeConfig(BaseModel):
+    """Optional speaker-diarization knobs (the ``hearsay[diarize]`` extra).
+
+    ``mode``: ``tag`` labels every clip with its speaker; ``dominant`` keeps only
+    each source's most-spoken speaker (single-voice TTS); ``per_speaker`` also emits
+    a per-speaker index. A clip is dropped as cross-speaker when its dominant
+    speaker covers less than ``min_purity`` of its overlapped speech.
+    """
+
+    enabled: bool = False
+    mode: str = "tag"
+    model: str = "pyannote/speaker-diarization-community-1"
+    min_speakers: int | None = None
+    max_speakers: int | None = None
+    min_purity: float = 0.85
+    hf_token: str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _check_mode(cls, value: str) -> str:
+        if value not in DIARIZE_MODES:
+            raise ValueError(f"mode must be one of {DIARIZE_MODES}, got {value!r}")
+        return value
+
+
 class DatasetConfig(BaseModel):
     """Knobs for a dataset build."""
 
@@ -92,6 +120,7 @@ class DatasetConfig(BaseModel):
     segment_min_s: float = Field(default=1.0, gt=0)
     segment_max_s: float = Field(default=15.0, gt=0)
     filters: FilterConfig = Field(default_factory=FilterConfig)
+    diarize: DiarizeConfig = Field(default_factory=DiarizeConfig)
 
 
 class DropRecord(BaseModel):
@@ -120,6 +149,7 @@ class BuildReport(BaseModel):
     dropped_count: int = 0
     drops_by_reason: dict[str, int] = Field(default_factory=dict)
     drops: list[DropRecord] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SourceResult(BaseModel):
@@ -152,3 +182,4 @@ class CombinedReport(BaseModel):
     sources: list[SourceResult] = Field(default_factory=list)
     succeeded: int = 0
     failed: int = 0
+    warnings: list[str] = Field(default_factory=list)
