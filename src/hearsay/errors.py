@@ -52,3 +52,11 @@ class FeedError(HearsayError):
 
 class PlaylistError(HearsayError):
     """A YouTube playlist could not be listed."""
+
+
+class AudioExportError(HearsayError):
+    """ffmpeg/ffprobe was unavailable or a clip could not be sliced/probed."""
+
+
+class DiarizationError(HearsayError):
+    """Speaker diarization could not run (extra not installed, model gated/unauthorized)."""

@@ -20,6 +20,11 @@ keywords = [
     "youtube",
     "podcast",
     "speech-to-text",
+    "text-to-speech",
+    "tts",
+    "stt",
+    "dataset",
+    "training-data",
     "subtitles",
     "markdown",
     "rag",
@@ -63,6 +68,13 @@ mcp = [
 # only; on other platforms hearsay falls back to CPU Whisper automatically.
 parakeet = [
     "parakeet-mlx>=0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+# Optional speaker diarization for single-voice TTS datasets. Heavy (pulls in torch,
+# ~2-3 GB) and the model is gated on Hugging Face (accept its conditions + set
+# HF_TOKEN). Kept out of the core install and the dev/test group on purpose —
+# dataset-mode diarization tests inject a fake diarizer and stay offline.
+diarize = [
+    "pyannote.audio>=4.0",
 ]
 
 [build-system]
@@ -114,8 +126,9 @@ warn_unused_ignores = true
 # so first-party import typos still fail.
 
 [[tool.mypy.overrides]]
-# These third-party deps ship no type stubs or py.typed marker.
-module = ["faster_whisper.*", "feedparser.*", "parakeet_mlx.*"]
+# These third-party deps ship no type stubs or py.typed marker (pyannote is an
+# optional extra and is not installed in the dev/test environment at all).
+module = ["faster_whisper.*", "feedparser.*", "parakeet_mlx.*", "pyannote.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

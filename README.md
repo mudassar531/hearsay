@@ -36,8 +36,9 @@ hearsay "https://www.youtube.com/watch?v=VIDEO_ID"   # → ./VIDEO_ID.md
 - [Two ways to use it](#two-ways-to-use-it)
 - [Why](#why) · [Install](#install) · [Transcription engines](#transcription-engines)
 - [Quickstart](#quickstart) · [Web UI](#web-ui) · [What you get](#what-you-get)
-- [How it compares](#how-it-compares) · [Give your agent ears (MCP)](#give-your-agent-ears)
-- [CLI reference](#cli-reference) · [Requirements](#requirements) · [Contributing](#contributing)
+- [Build training datasets](#build-training-datasets) · [How it compares](#how-it-compares)
+- [Give your agent ears (MCP)](#give-your-agent-ears) · [CLI reference](#cli-reference)
+- [Requirements](#requirements) · [Contributing](#contributing)
 
 ## Two ways to use it
 
@@ -79,6 +80,7 @@ Optional extras:
 ```bash
 uv tool install "hearsay[mcp]"        # MCP server, for AI agents
 uv tool install "hearsay[parakeet]"   # fast Apple-Silicon engine (macOS arm64)
+uv tool install "hearsay[diarize]"    # speaker diarization for single-voice TTS datasets
 ```
 
 **System requirement:** [ffmpeg](#requirements) on your PATH.
@@ -152,8 +154,10 @@ hearsay web --host 0.0.0.0       # expose on your LAN (unauthenticated — caref
 3. Optionally tick **Force transcription**, toggle **VAD**, or pick a model.
 4. Hit send — the transcript renders with **Copy** / **Download** buttons.
 
-Single video URLs and file uploads go through the UI; for playlists and podcast
-feeds, use the CLI (the UI shows a friendly hint).
+Tick **Dataset** to build a [training dataset](#build-training-datasets) instead
+(set clip length and sample rate); it downloads as a `.zip`. Single video URLs and
+file uploads go through the UI; for playlists and podcast feeds, use the CLI (the UI
+shows a friendly hint).
 
 ## What you get
 
@@ -186,6 +190,53 @@ Pass `--json` for a sidecar matching the [`Transcript` schema](docs/schema.json)
 metadata plus `chunks[]`, each with `start_s`, `end_s`, `section`, and `text` —
 ready to embed.
 
+## Build training datasets
+
+The markdown above is for **reading** (RAG, humans). `hearsay dataset` is a second,
+separate mode that turns the same media into **ML training datasets** for **TTS and
+STT** — audio sliced into short clips paired with exact, verbatim transcripts, in
+standard layouts a training pipeline reads directly.
+
+```bash
+# A short video → a dataset folder (LJSpeech metadata.csv + NeMo manifest.jsonl + wavs/)
+hearsay dataset "https://youtu.be/VIDEO_ID" --out ./voice-data
+
+# A whole playlist / channel / podcast feed → one merged dataset
+hearsay dataset "https://example.com/feed.xml" --out ./speech-data
+
+# 16 kHz mono for ASR, custom clip length, also emit a HuggingFace audiofolder index
+hearsay dataset talk.mp3 --sample-rate 16000 --segment-min 2 --segment-max 12 --format hf
+```
+
+You get a folder like:
+
+```text
+voice-data/
+  wavs/VIDEO_ID_0001.wav …     # mono 16-bit PCM, cut on sentence/pause boundaries, never mid-word
+  metadata.csv                  # LJSpeech: id|text|text  (Coqui / Piper read this directly)
+  manifest.jsonl                # NeMo/ESPnet: {"audio_filepath","duration","text","offset"}
+  dataset_card.md               # provenance, counts, language + a rights/consent note
+  dropped.jsonl                 # every filtered-out clip, with the reason
+```
+
+- **Word-accurate cuts.** Clips are sliced on word-level timestamps (faster-whisper
+  `word_timestamps`, or Parakeet on Apple Silicon) — never mid-word.
+- **Quality filtering** (on by default) drops junk: too-short/long, internal silence,
+  wrong-script/odd speaking-rate text, repetition, and low ASR confidence. Each drop is
+  logged; `--no-filter` keeps everything.
+- **Single-voice TTS from multi-speaker audio** needs diarization:
+  `uv tool install "hearsay[diarize]"`, accept the
+  [pyannote model](https://hf.co/pyannote/speaker-diarization-community-1) conditions and
+  set `HF_TOKEN`, then `--dominant-speaker` (keep the host) or `--per-speaker` (one index
+  per speaker). Without it, datasets are **mixed-speaker** (fine for STT) and hearsay says so.
+
+> **Accuracy & rights.** Word boundaries from Whisper/Parakeet are good but not
+> phonetically exact — clips are padded and snapped to pauses, and you should spot-check.
+> **You are responsible** for the rights to any media you process and for voice consent
+> (cloning a real person's voice may require it); extracting audio from YouTube may breach
+> its Terms. hearsay is local and ships no datasets. *Informational, not legal advice* —
+> see each generated `dataset_card.md`.
+
 ## How it compares
 
 | | **hearsay** | DIY `yt-dlp` + Whisper | markitdown / docling |
@@ -198,6 +249,7 @@ ready to embed.
 | Podcasts · playlists · batch | ✅ | ✗ manual | ✗ |
 | Fast Apple-Silicon engine | ✅ Parakeet (MLX) | ✗ DIY | n/a |
 | JSON sidecar for RAG | ✅ stable schema | ✗ manual | varies |
+| **TTS/STT dataset export** | ✅ LJSpeech + JSONL, filtered, diarizable | ✗ DIY plumbing | ✗ |
 | Browser UI + MCP server | ✅ | ✗ | varies |
 
 hearsay does **media**; document tools like
@@ -286,6 +338,19 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   --latest             Batch: ingest only the most recent item
   --episode N          Batch: ingest only item N (1-indexed)
   --all [--limit N]    Batch: ingest all items (optionally capped)
+
+hearsay dataset <SOURCE> [options]   Build a TTS/STT training dataset
+  --out PATH           Dataset output directory (default ./hearsay-dataset)
+  --format FMT         ljspeech | jsonl | hf (repeatable; default ljspeech + jsonl)
+  --sample-rate HZ     Output WAV rate (default 22050; 16000 for ASR)
+  --segment-min/max S  Clip length bounds in seconds (default 1–15)
+  --model / --lang / --vad / --no-vad    Transcription (as above)
+  --normalize          EBU R128 loudness-normalize each clip
+  --no-filter          Keep every clip (skip the quality filters)
+  --diarize            Label speakers (needs hearsay[diarize] + HF_TOKEN)
+  --per-speaker        Diarize and emit a per-speaker index
+  --dominant-speaker   Diarize and keep only the most-spoken speaker
+  --limit N            Batch: cap items from a playlist/feed
 
 hearsay web            Run the local web UI (--host, --port)
 hearsay mcp            Run the MCP stdio server

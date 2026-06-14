@@ -326,6 +326,345 @@ $ uv run hearsay "https://www.youtube.com/watch?v=rStL7niR7gs" -o out.md
 
 Parked in `IDEAS.md`: speaker diarization via whisperX · `--frames` keyframe extraction · vector-store export helpers · web URL article fallback.
 
+---
+
+# v0.2 — Dataset Export Mode (TTS/STT)
+
+New, additive mode (`hearsay dataset <SOURCE>`). Design + citations: `docs/dataset-mode-design.md`. Same rules: a box is ticked only after its verification command ran and passed; one commit per task; phase gates paste real evidence then STOP.
+
+## STEP ZERO (Dataset mode)
+
+- [x] Research target formats, alignment, audio cutting, quality filters, diarization, deps/licenses, legality (web-grounded + adversarially verified) — verified: 7-dimension research workflow completed, findings folded into the design memo
+- [x] Write `docs/dataset-mode-design.md` (feasibility & design memo) — verified: file present
+- [x] Append "v0.2 — Dataset Export Mode (TTS/STT)" to `SPEC.md`, keeping all v0.1 content intact — verified: section appended below PHASE 6
+- [x] Add v0.2 phases to `PROGRESS.md` and log key decisions in `DECISIONS.md`; move diarization + vector-store/export helpers out of `IDEAS.md` into this plan — verified: this section; DECISIONS entry added; IDEAS.md updated
+- [x] Design approved by the user (2026-06-14, "approved ultracode") — Phase D1 started
+
+## PHASE D1 — Core segmentation engine (the heart)
+
+- [x] Engine-agnostic `Word` model + adapters: faster-whisper `Word(word,start,end,probability)` and merged Parakeet tokens (split on literal leading space) — verified: `Word` in `models.py` (frozen), adapters in `dataset/words.py`; 13 adapter tests pass (merge, blank/None drop, clamp, geometric-mean confidence, defensive timings)
+- [x] Add opt-in `word_timestamps` capture to `transcribe.py` (default off → existing behavior, JSON schema, and markdown output all unchanged) — verified: `TranscriptionResult.words` (default None); whisper requests word timings + parakeet merges tokens only when asked; tiny-model test captures fox/dog words; schema-sync test still passes
+- [x] Pure `dataset/segmentation.py`: words → `DatasetSegment`s — cut on sentence/pause boundaries, clamp to `[min_s, max_s]`, never split mid-word, repair inverted spans, attach exact start/end + verbatim text — verified: greedy pause-primary (chosen via a 3-design judge panel; see DECISIONS); spans use range *extent* so a glitched interior word can't hide
+- [x] Heavy unit tests: long sentences, no punctuation, tiny gaps, inverted/overlapping/out-of-order/NaN spans, one-huge-word, empty input, tiny-tail merge/isolate/rebalance, determinism, plus a 400-case property/fuzz pass over noisy inputs — verified: 34 segmentation tests pass offline
+
+**Acceptance:** segmentation tests pass offline; segments are lossless w.r.t. input words, never cut mid-word, all within `[min,max]` (or flagged when a single word exceeds max).
+
+### Phase D1 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The segmentation algorithm
+was chosen via a 3-candidate judge panel (pause-primary / sentence-first / DP) whose
+adversarial critic caught a real design bug — an endpoint-only duration let a glitched
+interior word hide and "launder" the `oversized` flag — fixed by computing every clip's
+span from its **range extent**. An independent 4-lens implementation review then
+adversarially verified the code: **zero real bugs** (the one substantive segmentation
+finding was confirmed *not-a-bug* — tiny-tail merge across a pause is the intended D1
+contract; internal-silence drop is a D3 filter), and 7 quality improvements were applied
+(dead-constant removal, `target_s` NaN guard, geometric-mean Parakeet confidence,
+defensive timing coercion, doc wording).
+
+```text
+$ uv run pytest tests/test_dataset_segmentation.py tests/test_dataset_words.py tests/test_transcribe.py
+54 passed in 3.90s
+
+$ uv run pytest            # full suite — existing behaviour unchanged
+218 passed in 8.10s
+
+$ uv run ruff check . && uv run mypy
+All checks passed!
+Success: no issues found in 38 source files
+```
+
+Invariants asserted by the property/fuzz test (400 noisy random inputs incl.
+NaN/inf/inverted/overlapping/out-of-order spans, blanks, degenerate params): lossless
+partition by identity & order, never mid-word, non-negative monotone spans, span =
+true extent of its words, `oversized` iff duration > max_s, no empty segments, and
+determinism. The markdown/JSON path is untouched (`word_timestamps` defaults False;
+`docs/schema.json` unchanged).
+
+## PHASE D2 — Audio export + manifest
+
+- [x] `dataset/audio.py`: ffmpeg slice (input-seek `-ss START -i -t DUR`, re-encode, `-ac 1`, `-ar SR`, `pcm_s16le`); ffprobe duration; `ensure_tools()` verifies ffmpeg+ffprobe on PATH (filter-availability checks land with `--normalize` in D6) — verified: real slicing of the fixture; ffprobe confirms mono @ target SR
+- [x] `dataset/formats.py`: LJSpeech `metadata.csv` (`id|text|text`) **and** NeMo `manifest.jsonl` **and** `dataset_card.md` (provenance, counts, total duration, language, rights/consent note); optional HF `audiofolder` (`metadata.jsonl`, no collision) — verified: 8 format tests incl. non-ASCII title + pipe-safety
+- [x] `dataset/build.py`: orchestrate one source → dataset folder; clip naming `<source_id>_<index4>.wav`; clamp ends to media length, drop past-EOF ghost clips — verified: 8 build tests + live YouTube run
+- [x] Tests: manifest/csv shape; audio↔text↔duration alignment on the fixture clip; oversized + past-EOF cases — verified: 16 D2 tests pass offline (ffmpeg on local files)
+
+**Acceptance:** run on one short real video → a folder a TTS/STT pipeline could load; clip count correct, audio+text line up, durations right.
+
+### Phase D2 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg/ffprobe 8.1). An
+independent 4-lens review (ffmpeg correctness / format conformance / build
+orchestration / offline+spec) adversarially verified the code and caught **2 real
+bugs** — both fixed: (1) `dataset_card.md` emitted `pretty_name`/`language` with
+`ensure_ascii=True`, producing lone surrogates in YAML for emoji titles; (2) a clip
+whose end ran past the source produced a 0-second "ghost" clip with a `duration: 0.0`
+manifest row. Build now clamps clip ends to the probed media length and drops
+fully-past-EOF clips. 6 improvements applied (start-clamp consistency, doc wording,
+extra regression tests).
+
+```text
+$ uv run pytest tests/test_dataset_formats.py tests/test_dataset_build.py
+16 passed in 1.69s
+
+$ uv run pytest            # full suite — markdown/JSON path unchanged
+234 passed in 11.21s
+
+$ uv run ruff check . && uv run mypy
+All checks passed!
+Success: no issues found in 43 source files
+```
+
+**Live acceptance** — one short real video → a loadable dataset (tiny model):
+
+```text
+$ build_dataset_from_youtube("https://www.youtube.com/watch?v=jNQXAC9IVRw", sr=22050, max=10s)
+clips: 3 · total: 14.42s · oversized: 0 · lang: en · files: metadata.csv, manifest.jsonl, dataset_card.md
+
+/tmp/hearsay-ds-acc/
+  wavs/{jNQXAC9IVRw_0001,_0002,_0003}.wav   # ffprobe: 22050 Hz, mono; 3.34 / 9.22 / 1.86 s
+  metadata.csv     # jNQXAC9IVRw_0001|All right, so here we are...|All right, so here we are...
+  manifest.jsonl   # {"audio_filepath":"wavs/jNQXAC9IVRw_0001.wav","duration":3.34,"text":"...","offset":0.0}
+  dataset_card.md  # YAML (license: unknown, "en", pretty_name "Me at the zoo") + provenance + consent note
+```
+
+Manifest durations exactly match the probed WAV durations (audio↔text↔duration aligned).
+
+**Tracked for later phases (from the review, intentionally deferred):**
+- Source-sample-rate-below-target **upsampling warning** (design memo §3) → D6 (user-facing channel).
+- ffmpeg **filter-availability** check (loudnorm/silenceremove) → D6, with `--normalize`.
+- `_safe_id` **collision** across same-titled sources is harmless for single-source D2; D4 batch must dedupe (like `batch.ensure_unique_slugs`).
+
+## PHASE D3 — Quality filtering
+
+- [x] Tier-1 filters (default on, no heavy deps, engine-agnostic): duration `[1,15]s`, internal-silence gap (>2s, glitch-resistant), **confidence** (mean per-word, an engine-agnostic proxy for `avg_logprob`/`no_speech_prob` — clips are word-regrouped & Parakeet has no segment logprobs; see DECISIONS), **compression_ratio** (Whisper's gzip formula, on text), **non_target_script** + chars-per-second (dep-free language proxy; per-language, skipped for CJK/unmapped) — verified: 20 filter tests
+- [x] Structured per-clip drop log (`dropped.jsonl`: clip, filter, value, threshold, text) + `BuildReport.dropped_count`/`drops_by_reason`; thresholds config-overridable via `FilterConfig`; `--no-filter` = `FilterConfig(enabled=False)` — verified: build-integration test + live demo
+- [x] Optional Tier-2 (off by default): clipping detection (dep-free, stdlib `wave` + numpy; both rails). Silero VAD / SNR deferred to an optional `hearsay[dataset]` extra (VAD needs a bundled model; kept core dep-free) — logged in DECISIONS — verified: clipping tests (incl. negative rail)
+- [x] Tests on deliberately bad segments (too short/long, silent join, wrong-script, garbage/repetitive, low-confidence) — verified: 20 filter unit tests + 2 build-integration tests
+
+**Acceptance:** filters drop the bad fixtures with correct logged reasons; summary reports kept/dropped counts.
+
+### Phase D3 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The filters were
+implemented from design memo §4 (with the Step-Zero corrections) then verified by
+an independent 4-lens adversarial review (the false-positive lens hit a transient
+content-filter API error and was re-checked by hand — see below). It caught **2 real
+bugs**, both fixed: (1) the clipping detector missed the **negative rail**
+(`np.abs(int16 -32768)` overflows) — now widened to int32; (2) a glitched far-future
+word end **masked a real internal silence** — the word end is now capped at a
+plausible max so the join is still caught. 6 improvements applied (deterministic
+strict-majority script test, char-rate skipped for unmapped scripts, doc/keying
+accuracy, extra tests).
+
+```text
+$ uv run pytest tests/test_dataset_filters.py
+20 passed in 0.10s
+
+$ uv run pytest            # full suite — markdown/JSON path unchanged
+256 passed in 9.90s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   45 files already formatted   Success: no issues found in 45 source files
+```
+
+**Acceptance — filters drop bad clips with logged reasons + summary** (within the fixture):
+
+```text
+SUMMARY: kept 1 · dropped 1 · by reason {'non_target_script': 1}
+dropped.jsonl: {"clip":"demo_seg0001","filter":"non_target_script","value":"cjk","threshold":"latin","text":"你好 世界 今天 天气"}
+metadata.csv:  demo_0001|Hello there friend|Hello there friend
+```
+
+**False-positive check (hand-run, covering the lens that errored):** default Tier-1
+filters on the real `sample.wav` speech (tiny model) kept the clip, **dropped 0** — the
+confidence (0.30), char-rate (5–25/s) and compression (2.4) defaults don't nuke clean
+speech.
+
+## PHASE D4 — Scale: playlists / channels / feeds → one merged dataset
+
+- [x] Batch every item through D1–D3 into a **single combined dataset** with a shared manifest, continuing past per-item failures — verified: `build_combined_dataset` + `build_dataset_from_playlist`/`_from_feed`; `_produce_clips` refactored out of `build_dataset` (single-source behavior unchanged); clips namespaced `<source_id>_NNNN` with cross-source de-dup; merge + continue-past-failure tests
+- [x] Summary table + totals (clips, hours); progress (`on_item` callback); resumability via `_state.json` (skip a source only if its result.ok + WAVs present; config-fingerprint invalidation; crash-safe incremental merged writes; orphan/stale-WAV reconcile so the tree always matches the manifest) — verified: resume-skip / add-new / config-invalidation / no-orphan tests
+- [x] Tests: multi-item merge, continue-past-failure, totals, dedup, resume, card, playlist wiring, empty playlist, 0-clip source — verified: 13 combined tests pass offline
+
+**Acceptance:** a small real playlist → one coherent dataset folder with merged manifest + totals.
+
+### Phase D4 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). An independent 4-lens
+adversarial review (merge/failure, resume, playlist/feed wiring+temp, spec/quality)
+verified the code and found **3 real bugs**, all fixed: (1) a source that sliced clips
+then **failed** left orphan WAVs; (2) a **re-run producing fewer clips** left stale
+higher-numbered WAVs; (3) emoji **source labels** in the combined card became
+surrogate gibberish (`ensure_ascii=False`). (1) and (2) are fixed by a single
+**reconcile** step that deletes any WAV not referenced by the merged manifest — giving
+a clean invariant: *every WAV is referenced and every clip has a WAV*. Plus a
+cache-shape guard (a corrupt `_state.json` entry re-runs instead of crashing) and a
+proactively-added config fingerprint (changing sample-rate/segment/filters invalidates
+resume state). 5 improvements + 5 regression tests applied.
+
+```text
+$ uv run pytest tests/test_dataset_combined.py
+13 passed
+
+$ uv run pytest            # full suite — single-source behaviour unchanged after refactor
+269 passed in 13.77s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   49 files already formatted   Success: no issues found in 46 source files
+```
+
+**Live acceptance — a real playlist → one coherent merged dataset** (Google "How
+Search Works", first 2 videos, tiny model):
+
+```text
+[1/2] How Google Search continues to improve results
+[2/2] How Google Search Works (in 5 minutes)
+TOTAL: clips 63 · 7.9 min · sources ok 2/2 · dropped 0
+
+/tmp/ds-pl/  (one shared tree)
+  wavs/   63 clips: 28 × DcKEPl-MpLA_*, 35 × 0eKVizvYSUQ_*   (namespaced per video)
+  manifest.jsonl  63 rows   metadata.csv  63   dropped.jsonl   _state.json (resume)
+  dataset_card.md  per-source table: DcKEPl-MpLA → 28 clips, 0eKVizvYSUQ → 35 clips
+  invariant: WAVs on disk (63) == manifest references (63)  ✓
+```
+
+- [x] `hearsay[diarize]` extra (`pyannote.audio>=4.0`, lazy-imported; kept out of core **and** the dev/test group so CI stays offline); clean degrade to a mixed-speaker dataset + warning when absent — verified: `find_spec` degrade path + `test_degrades_to_mixed_speaker_when_not_installed`
+- [x] Per-speaker / dominant-speaker / tag export modes (`DiarizeConfig.mode`): `dominant` keeps each source's most-spoken speaker, `per_speaker` emits per-speaker manifests over the shared `wavs/`; cross-speaker clips dropped below `min_purity` — verified: tag/dominant/per_speaker + cross-speaker tests (the CLI flag *names* `--per-speaker`/`--dominant-speaker` are wired in D6)
+- [x] HF token via `DiarizeConfig.hf_token` → `HF_TOKEN` → `HUGGING_FACE_HUB_TOKEN`; load/auth failure raises an actionable `DiarizationError` (accept the model's conditions + create a READ token) — verified: `resolve_token` + not-installed-error tests
+- [x] Tests: pure max-overlap assignment + purity, dominant, degrade, cross-speaker drop, pyannote 4.x `DiarizeOutput` / 3.x `Annotation` parsing (fake pipeline), per-source speaker namespacing in a combined build — verified: 16 diarization tests pass offline
+
+**Acceptance:** with the extra, a 2-speaker fixture yields per-speaker (or dominant-only) clips; without it, a clear mixed-speaker warning.
+
+### Phase D5 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The pyannote 4.x adapter was
+built against a web-verified API (it can't be live-tested in CI — heavy + gated +
+network), then an independent 3-lens adversarial review verified the code. It found
+**1 real bug** — `_state_fingerprint` ignored the `diarize` config, so resume would
+reuse stale clips across a diarization change — now fixed (the fingerprint includes
+diarize, minus the token). 7 improvements applied: wrap the pyannote output parsing in
+an actionable error (API-drift safety), validate `DiarizeConfig.mode`, annotate
+`_load`, and add tests for the 4.x/3.x/malformed parse paths, mode validation,
+fingerprint invalidation, and combined per-source speaker namespacing.
+
+```text
+$ uv run pytest tests/test_dataset_diarize.py
+16 passed
+
+$ uv run pytest            # full suite — markdown/JSON path + D1-D4 unchanged
+286 passed in 13.59s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   50 files already formatted   Success: no issues found in 48 source files
+```
+
+**Offline acceptance (fake diarizer; 2 speakers SPEAKER_00=[0,2.5], SPEAKER_01=[2.5,4.5]):**
+`tag` → both clips labelled `sample:SPEAKER_00` / `sample:SPEAKER_01`; `dominant` → only
+`sample:SPEAKER_00` kept (other dropped `non_dominant_speaker`, WAV removed); `per_speaker`
+→ `manifest.sample-SPEAKER_00.jsonl` + `…SPEAKER_01.jsonl`; a 50/50 cross-speaker clip
+dropped (`cross_speaker`); **without the extra** → mixed-speaker dataset + the warning.
+
+**Live acceptance (real pyannote) — handed to the user** (multi-GB, HF-gated, can't run
+in CI). Run after: (1) `uv tool install "hearsay[diarize]"`; (2) accept conditions at
+https://hf.co/pyannote/speaker-diarization-community-1 ; (3) `export HF_TOKEN=...` (the
+gitignored `local.env`). Then a real 2-speaker clip diarizes into per-speaker / dominant clips.
+
+## PHASE D6 — Both front ends + docs
+
+- [x] CLI `hearsay dataset <SOURCE>` subcommand: routing (file/playlist/video/feed, like `ingest`) + all flags wired to `DatasetConfig` — `--out`, repeatable `--format`, `--sample-rate`, `--segment-min/max`, `--lang`, `--model`, `--vad/--no-vad`, `--normalize`, `--no-filter`, `--diarize`/`--per-speaker`/`--dominant-speaker`, `--hf-token`, `--min/max-speakers`, `--limit`, `--no-resume`; rich summary + warnings — verified: 9 CLI tests + live run
+- [x] Web UI "Dataset mode": a toggle + options (segment bounds, sample rate) builds a single source, zips it, downloads it; playlists/feeds → CLI hint — verified: 8 web tests (incl. zip round-trip, 400 on bad params, no temp leak) + live HTTP run
+- [x] `--normalize` (two-pass EBU R128 loudnorm, length-preserving) + ffmpeg filter check + source-rate upsampling warning (D2-deferred) — verified: audio tests (length preserved, mono @ target, upsampling warning)
+- [x] README "Build training datasets" section (honest accuracy/rights notes, comparison to markdown mode); comparison-table row + CLI reference + TOC + `hearsay[diarize]` install + keywords updated — verified: every documented flag exists; commands run
+
+**Acceptance:** CLI + web-UI dataset runs both produce a loadable dataset; README path verified.
+
+### Phase D6 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg 8.1). An independent
+4-lens adversarial review (CLI / web / loudnorm / docs) verified the code and found
+**3 real bugs**, all fixed: (1) single-pass loudnorm trimmed ~89 ms off each clip →
+switched to **two-pass** (`linear=true`, length-preserving — verified 2.000 s in and
+out); (2) bad web numeric params returned a 500 → now a friendly 400; (3) `[diarize]`
+in help/warnings was parsed as Rich markup → help rephrased and dynamic strings
+`rich.markup.escape`-d. 5 improvements applied (`--lang ""`→None, large-source UI hint,
++ audio/loudnorm/upsampling/web-cleanup tests).
+
+```text
+$ uv run pytest            # full suite — markdown/JSON path + D1-D5 unchanged
+309 passed in 18.57s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   53 files already formatted   Success: no issues found in 51 source files
+```
+
+**Live acceptance — both front ends produce a loadable dataset:**
+
+```text
+# CLI
+$ hearsay dataset tests/fixtures/sample.wav --out /tmp/ds-cli --model tiny --sample-rate 16000 --no-filter
+✓ 1 clips · 00:00:04 · → /tmp/ds-cli/   (wavs/ + metadata.csv + manifest.jsonl + dataset_card.md + dropped.jsonl)
+
+# Web UI (POST /api/dataset-file with the fixture)
+status 200 · dataset True · clips 1 · zip contains:
+  ['dataset_card.md','dropped.jsonl','manifest.jsonl','metadata.csv','wavs/sample_0001.wav']
+```
+
+## PHASE D7 — Launch-ready polish
+
+- [x] End-to-end fresh-run test following only the README; CI green locally — `uv sync --frozen` exit 0, `ruff`/`format`/`mypy` clean, **309 tests pass offline**, every documented `hearsay dataset` flag exists, and the documented happy-path command runs and produces the documented folder shape
+- [x] Tiny, license-clean example mini-dataset committed (`examples/dataset/`, built from the synthetic `say` fixture; all three index formats) so people see the output shape without running anything
+- [x] Short "what's new in v0.2" note — `CHANGELOG.md` (Keep a Changelog style)
+- [x] Final summary: what shipped, what's blocked, sample dataset stats, suggested next ideas (below)
+
+**Acceptance:** README path verified end-to-end; CI steps green locally; example dataset committed and link-clean on a fresh clone.
+
+### Phase D7 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15, ffmpeg 8.1). A 4-lens
+adversarial launch review (docs-accuracy / example-integrity / CI-fresh-install /
+changelog-honesty), each finding independently verified, returned **2 confirmed
+issues — both fixed before this gate**: (1) *blocker* — `examples/dataset/` was
+untracked, so the committed `examples/README.md` links would 404 on a fresh clone
+→ committed all six paths (incl. the 0-byte `dropped.jsonl`), verified in `HEAD`;
+(2) *minor* — CHANGELOG called `detect_clipping` "stdlib only" though it uses numpy
+(a faster-whisper transitive dep) → corrected the wording. The other lenses
+confirmed the README/output-shape claims, the example's internal consistency
+(WAV mono/16-bit PCM @ 16 kHz; manifest duration == probed duration; transcript
+byte-identical across all three indices), and that CI is offline + ffmpeg-only with
+the diarize extra kept out of the default install.
+
+```text
+$ uv sync --frozen            # CI step — lock in sync with pyproject
+exit 0
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   54 files already formatted   Success: no issues found in 51 source files
+
+$ uv run pytest               # offline; whisper-gated tests skip when no model cached
+309 passed in 19.29s
+
+# Fresh README run — the documented dataset command on the license-clean fixture
+$ uv run hearsay dataset tests/fixtures/sample.wav --out examples/dataset \
+    --sample-rate 16000 --segment-min 1 --segment-max 12 \
+    --format ljspeech --format jsonl --format hf
+✓ 1 clips · 00:00:04 · dropped 0 · → examples/dataset/
+
+$ ls examples/dataset/        # matches the README's documented folder shape
+dataset_card.md  dropped.jsonl  manifest.jsonl  metadata.csv  metadata.jsonl  wavs/
+
+$ git ls-tree -r HEAD --name-only examples/dataset/   # link-clean on a fresh clone
+examples/dataset/dataset_card.md
+examples/dataset/dropped.jsonl
+examples/dataset/manifest.jsonl
+examples/dataset/metadata.csv
+examples/dataset/metadata.jsonl
+examples/dataset/wavs/sample_0001.wav
+```
+
+**Example dataset stats:** 1 clip · 4.64 s · en · mono 16-bit PCM @ 16 kHz ·
+0 dropped · 164 KB total. Transcript is real ASR output (`dog?` vs the script's
+`dog.` is the model's own punctuation guess, left verbatim).
+
 ## Blockers
 
 (none yet)
