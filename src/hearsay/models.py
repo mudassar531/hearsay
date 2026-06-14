@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from hearsay.timefmt import format_timestamp
 
@@ -34,6 +34,27 @@ class Segment(BaseModel):
     text: str
     start_s: float = Field(ge=0)
     end_s: float = Field(ge=0)
+
+
+class Word(BaseModel):
+    """One time-aligned word from an ASR engine, normalized across engines.
+
+    The engine-agnostic unit the dataset-export mode segments on. Field names
+    follow hearsay's ``Segment`` (``text``/``start_s``/``end_s``); ``confidence``
+    is the engine's per-word score in ``[0, 1]`` (faster-whisper ``probability``,
+    Parakeet ``confidence``), defaulting to ``1.0`` when an engine omits it.
+
+    Timings are carried *verbatim* from the engine — possibly noisy (inverted,
+    overlapping, jittered). The segmenter repairs spans defensively; ``Word``
+    itself is frozen and unvalidated-for-range so raw ASR output is never lost.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    start_s: float
+    end_s: float
+    confidence: float = 1.0
 
 
 class Paragraph(BaseModel):
