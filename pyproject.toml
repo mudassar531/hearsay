@@ -65,6 +65,11 @@ select = [
     "RUF", # ruff-specific
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# webui.py embeds a single-page HTML/CSS/JS asset as a string literal; line
+# length is meaningless there.
+"src/hearsay/webui.py" = ["E501"]
+
 [tool.mypy]
 files = ["src", "tests"]
 python_version = "3.11"

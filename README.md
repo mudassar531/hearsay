@@ -126,6 +126,20 @@ hearsay does **media**; document tools like
 [markitdown](https://github.com/microsoft/markitdown) and
 [docling](https://github.com/docling-project/docling) do **documents**. Use both.
 
+## Web UI
+
+Prefer a browser? `hearsay web` starts a tiny local web UI — paste a YouTube URL
+or drop in an audio/video file, pick the model, and get a live markdown preview
+with copy and download. It's a single self-contained page with **no extra
+dependencies** (built on the standard library).
+
+```bash
+hearsay web                      # → http://localhost:8756
+hearsay web --port 9000          # custom port
+```
+
+(Single video URLs and file uploads; for playlists and podcast feeds use the CLI.)
+
 ## Give your agent ears
 
 hearsay ships an [MCP](https://modelcontextprotocol.io) server so AI agents can
@@ -210,6 +224,7 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   --all [--limit N]    Batch: ingest all items (optionally capped)
   --version            Show version
 
+hearsay web            Run the local web UI (--host, --port)
 hearsay mcp            Run the MCP stdio server
 ```
 
