@@ -482,11 +482,51 @@ speech.
 
 ## PHASE D4 — Scale: playlists / channels / feeds → one merged dataset
 
-- [ ] Batch every item through D1–D3 into a **single combined dataset** with a shared manifest, continuing past per-item failures
-- [ ] Summary table + totals (clips, hours); progress; resumability if feasible (skip already-built clips by source_id+index)
-- [ ] Tests: multi-item merge, continue-past-failure, totals
+- [x] Batch every item through D1–D3 into a **single combined dataset** with a shared manifest, continuing past per-item failures — verified: `build_combined_dataset` + `build_dataset_from_playlist`/`_from_feed`; `_produce_clips` refactored out of `build_dataset` (single-source behavior unchanged); clips namespaced `<source_id>_NNNN` with cross-source de-dup; merge + continue-past-failure tests
+- [x] Summary table + totals (clips, hours); progress (`on_item` callback); resumability via `_state.json` (skip a source only if its result.ok + WAVs present; config-fingerprint invalidation; crash-safe incremental merged writes; orphan/stale-WAV reconcile so the tree always matches the manifest) — verified: resume-skip / add-new / config-invalidation / no-orphan tests
+- [x] Tests: multi-item merge, continue-past-failure, totals, dedup, resume, card, playlist wiring, empty playlist, 0-clip source — verified: 13 combined tests pass offline
 
-**Acceptance:** a small real playlist → one coherent dataset folder with merged manifest + totals. **STOP.**
+**Acceptance:** a small real playlist → one coherent dataset folder with merged manifest + totals.
+
+### Phase D4 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). An independent 4-lens
+adversarial review (merge/failure, resume, playlist/feed wiring+temp, spec/quality)
+verified the code and found **3 real bugs**, all fixed: (1) a source that sliced clips
+then **failed** left orphan WAVs; (2) a **re-run producing fewer clips** left stale
+higher-numbered WAVs; (3) emoji **source labels** in the combined card became
+surrogate gibberish (`ensure_ascii=False`). (1) and (2) are fixed by a single
+**reconcile** step that deletes any WAV not referenced by the merged manifest — giving
+a clean invariant: *every WAV is referenced and every clip has a WAV*. Plus a
+cache-shape guard (a corrupt `_state.json` entry re-runs instead of crashing) and a
+proactively-added config fingerprint (changing sample-rate/segment/filters invalidates
+resume state). 5 improvements + 5 regression tests applied.
+
+```text
+$ uv run pytest tests/test_dataset_combined.py
+13 passed
+
+$ uv run pytest            # full suite — single-source behaviour unchanged after refactor
+269 passed in 13.77s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   49 files already formatted   Success: no issues found in 46 source files
+```
+
+**Live acceptance — a real playlist → one coherent merged dataset** (Google "How
+Search Works", first 2 videos, tiny model):
+
+```text
+[1/2] How Google Search continues to improve results
+[2/2] How Google Search Works (in 5 minutes)
+TOTAL: clips 63 · 7.9 min · sources ok 2/2 · dropped 0
+
+/tmp/ds-pl/  (one shared tree)
+  wavs/   63 clips: 28 × DcKEPl-MpLA_*, 35 × 0eKVizvYSUQ_*   (namespaced per video)
+  manifest.jsonl  63 rows   metadata.csv  63   dropped.jsonl   _state.json (resume)
+  dataset_card.md  per-source table: DcKEPl-MpLA → 28 clips, 0eKVizvYSUQ → 35 clips
+  invariant: WAVs on disk (63) == manifest references (63)  ✓
+```
 
 ## PHASE D5 — Optional diarization (single-speaker TTS)
 
