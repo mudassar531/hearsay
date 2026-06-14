@@ -10,14 +10,23 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from hearsay import __version__
 from hearsay.dataset.audio import ensure_tools, probe_duration, slice_clip
-from hearsay.dataset.formats import write_dataset_card, write_indices
-from hearsay.dataset.models import DATASET_FORMATS, BuildReport, DatasetClip, DatasetConfig
+from hearsay.dataset.filters import detect_clipping_drops, filter_segments
+from hearsay.dataset.formats import write_dataset_card, write_dropped, write_indices
+from hearsay.dataset.models import (
+    DATASET_FORMATS,
+    BuildReport,
+    DatasetClip,
+    DatasetConfig,
+    DatasetSegment,
+    DropRecord,
+)
 from hearsay.dataset.segmentation import segment_words
 from hearsay.errors import AudioExportError, InvalidSourceError
 from hearsay.models import SourceMetadata, Word
@@ -87,13 +96,29 @@ def build_dataset(
     # past EOF is skipped rather than written as a 0-second "ghost" clip.
     source_duration = probe_duration(source_audio)
     source_id = _safe_id(meta.video_id or meta.title)
-    clips: list[DatasetClip] = []
-    index = 0
-    for seg in segments:
+
+    # Pre-slice candidates (clamped span); Tier-1 filters run here so we never
+    # waste an ffmpeg slice on a clip we are going to drop.
+    candidates: list[tuple[str, DatasetSegment, float]] = []
+    spans: dict[str, tuple[float, float]] = {}
+    for seg_index, seg in enumerate(segments, start=1):
         start = seg.start_s
         end = min(seg.end_s, source_duration) if source_duration > 0 else seg.end_s
         if end - start <= 0:
             continue  # nothing left to slice (segment lies past the source end)
+        ref = f"{source_id}_seg{seg_index:04d}"
+        candidates.append((ref, seg, end - start))
+        spans[ref] = (start, end)
+
+    # Tier-1 quality filters (default on). Note an "oversized" clip (longer than
+    # segment_max_s) is dropped here by the duration filter whenever
+    # filters.max_duration_s == segment_max_s (the defaults) — intended.
+    kept, drops = filter_segments(candidates, config.filters)
+
+    clips: list[DatasetClip] = []
+    index = 0
+    for ref, seg, _duration in kept:
+        start, end = spans[ref]
         index += 1
         clip_id = f"{source_id}_{index:04d}"
         rel = f"wavs/{clip_id}.wav"
@@ -103,6 +128,15 @@ def build_dataset(
         if duration_s <= _MIN_CLIP_S:
             dest.unlink(missing_ok=True)  # empty/near-empty slice — don't record it
             index -= 1
+            drops.append(
+                DropRecord(
+                    clip=ref,
+                    filter="empty_slice",
+                    value="0.00s",
+                    threshold=">0s",
+                    text=seg.text[:80],
+                )
+            )
             continue
         clips.append(
             DatasetClip(
@@ -116,7 +150,14 @@ def build_dataset(
             )
         )
 
+    # Tier-2 (opt-in): drop hard-clipped clips and remove their WAVs.
+    clips, clip_drops = detect_clipping_drops(clips, out_dir, config.filters)
+    for drop in clip_drops:
+        (out_dir / "wavs" / f"{drop.clip}.wav").unlink(missing_ok=True)
+    drops.extend(clip_drops)
+
     files = write_indices(out_dir, clips, config.formats)
+    files.append(write_dropped(out_dir, drops))
     report = BuildReport(
         out_dir=str(out_dir),
         source=meta.source,
@@ -128,6 +169,9 @@ def build_dataset(
         formats=list(config.formats),
         files=files,
         clips=clips,
+        dropped_count=len(drops),
+        drops_by_reason=dict(Counter(d.filter for d in drops)),
+        drops=drops,
     )
     card = write_dataset_card(
         out_dir, report, meta, version=version, generated_at=now(), source_platform=source_platform
@@ -164,8 +208,14 @@ def build_dataset_from_file(
         video_id=path.stem,
     )
     return build_dataset(
-        path, words, meta, config=config, language=result.language,
-        source_platform="local", version=version, now=now,
+        path,
+        words,
+        meta,
+        config=config,
+        language=result.language,
+        source_platform="local",
+        version=version,
+        now=now,
     )
 
 
@@ -192,13 +242,22 @@ def build_dataset_from_youtube(
     with tempfile.TemporaryDirectory(prefix="hearsay-ds-") as tmp:
         audio_path = audio_downloader(url, Path(tmp))
         result = transcriber(
-            audio_path, model_size=model_size, language=language,
-            vad_filter=vad_filter, word_timestamps=True,
+            audio_path,
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter,
+            word_timestamps=True,
         )
         words = _require_words(result)
         return build_dataset(
-            audio_path, words, meta, config=config, language=result.language,
-            source_platform="youtube", version=version, now=now,
+            audio_path,
+            words,
+            meta,
+            config=config,
+            language=result.language,
+            source_platform="youtube",
+            version=version,
+            now=now,
         )
 
 

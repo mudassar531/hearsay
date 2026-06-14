@@ -13,13 +13,14 @@ from pathlib import Path
 import pytest
 
 from hearsay.dataset.build import build_dataset, build_dataset_from_file
-from hearsay.dataset.models import DatasetConfig
+from hearsay.dataset.models import DatasetConfig, FilterConfig
 from hearsay.errors import AudioExportError, InvalidSourceError
 from hearsay.models import SourceMetadata, Word
 from hearsay.transcribe import TranscriptionError, transcribe_audio
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE = FIXTURES / "sample.wav"  # ~4.71s, 16 kHz mono, "...quick brown fox...lazy dog..."
+_NO_FILTER = FilterConfig(enabled=False)  # isolate D2 behaviour from D3 quality filtering
 
 
 def _synthetic_words() -> list[Word]:
@@ -39,16 +40,31 @@ def _synthetic_words() -> list[Word]:
 
 def _meta() -> SourceMetadata:
     return SourceMetadata(
-        title="sample", source=str(SAMPLE), channel="Local file",
-        duration_s=4.71, video_id="sample",
+        title="sample",
+        source=str(SAMPLE),
+        channel="Local file",
+        duration_s=4.71,
+        video_id="sample",
     )
 
 
 def _probe_stream(path: Path) -> tuple[int, int]:
     proc = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-         "stream=sample_rate,channels", "-of", "json", str(path)],
-        capture_output=True, text=True, check=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate,channels",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     stream = json.loads(proc.stdout)["streams"][0]
     return int(stream["sample_rate"]), int(stream["channels"])
@@ -113,7 +129,9 @@ def test_oversized_clip_surfaced_in_manifest(tmp_path: Path) -> None:
     # A single word longer than max_s is unbreakable -> emitted oversized, and the
     # manifest must reflect its real (clamped-to-source) duration.
     words = [Word(text="loooong", start_s=0.0, end_s=3.0)]
-    config = DatasetConfig(out_dir=tmp_path, segment_min_s=0.5, segment_max_s=1.0)
+    config = DatasetConfig(
+        out_dir=tmp_path, segment_min_s=0.5, segment_max_s=1.0, filters=_NO_FILTER
+    )
     report = build_dataset(SAMPLE, words, _meta(), config=config)
     assert report.clip_count == 1
     assert report.oversized_count == 1
@@ -131,7 +149,9 @@ def test_clips_past_source_end_are_clamped_or_dropped(tmp_path: Path) -> None:
         Word(text="past", start_s=6.0, end_s=7.0),  # fully past EOF -> dropped
         Word(text="gone", start_s=8.0, end_s=9.0),  # fully past EOF -> dropped
     ]
-    config = DatasetConfig(out_dir=tmp_path, segment_min_s=0.2, segment_max_s=2.0)
+    config = DatasetConfig(
+        out_dir=tmp_path, segment_min_s=0.2, segment_max_s=2.0, filters=_NO_FILTER
+    )
     report = build_dataset(SAMPLE, words, _meta(), config=config)
     manifest = [json.loads(line) for line in (tmp_path / "manifest.jsonl").read_text().splitlines()]
     assert all(row["duration"] > 0 for row in manifest)  # no ghost clips
@@ -140,6 +160,48 @@ def test_clips_past_source_end_are_clamped_or_dropped(tmp_path: Path) -> None:
         wav = tmp_path / clip.audio_path
         assert wav.stat().st_size > 100  # real audio, not a 78-byte header-only WAV
         assert clip.end_s <= 4.72  # clamped to the source length
+
+
+def test_build_filters_drop_bad_clips_and_log(tmp_path: Path) -> None:
+    # Two clips within the 4.71s fixture, split by a >2s pause: a wrong-script
+    # (CJK, target "en") clip is dropped; a clean English clip is kept.
+    words = [
+        Word(text="你好", start_s=0.0, end_s=0.3, confidence=0.9),
+        Word(text="世界", start_s=0.3, end_s=0.6, confidence=0.9),
+        Word(text="今天", start_s=0.6, end_s=1.0, confidence=0.9),
+        Word(text="Hello", start_s=3.5, end_s=3.8, confidence=0.9),
+        Word(text="there", start_s=3.8, end_s=4.1, confidence=0.9),
+        Word(text="friend", start_s=4.1, end_s=4.5, confidence=0.9),
+    ]
+    config = DatasetConfig(out_dir=tmp_path, segment_min_s=0.5, segment_max_s=10.0)
+    report = build_dataset(SAMPLE, words, _meta(), config=config, language="en")
+
+    assert report.clip_count == 1  # only the English clip survives
+    assert "Hello there friend" in report.clips[0].text
+    assert report.dropped_count == 1
+    assert report.drops_by_reason == {"non_target_script": 1}
+
+    dropped = (tmp_path / "dropped.jsonl").read_text().splitlines()
+    assert len(dropped) == 1
+    rec = json.loads(dropped[0])
+    assert rec["filter"] == "non_target_script" and rec["value"] == "cjk"
+    assert "dropped.jsonl" in report.files
+
+
+def test_build_no_filter_keeps_all(tmp_path: Path) -> None:
+    # Same input, filtering disabled -> both clips kept, no drops.
+    words = [
+        Word(text="你好", start_s=0.0, end_s=0.5, confidence=0.9),
+        Word(text="世界", start_s=0.5, end_s=1.0, confidence=0.9),
+        Word(text="Hello", start_s=3.5, end_s=4.0, confidence=0.9),
+        Word(text="there", start_s=4.0, end_s=4.5, confidence=0.9),
+    ]
+    config = DatasetConfig(
+        out_dir=tmp_path, segment_min_s=0.5, segment_max_s=10.0, filters=_NO_FILTER
+    )
+    report = build_dataset(SAMPLE, words, _meta(), config=config)
+    assert report.clip_count == 2
+    assert report.dropped_count == 0
 
 
 def test_unknown_format_rejected(tmp_path: Path) -> None:
@@ -161,7 +223,11 @@ def test_build_from_file_with_tiny_model(tmp_path: Path) -> None:
         return transcribe_audio(path, local_files_only=True, **kwargs)  # type: ignore[arg-type]
 
     config = DatasetConfig(
-        out_dir=tmp_path, sample_rate=16000, segment_min_s=0.5, segment_max_s=15.0
+        out_dir=tmp_path,
+        sample_rate=16000,
+        segment_min_s=0.5,
+        segment_max_s=15.0,
+        filters=_NO_FILTER,
     )
     try:
         report = build_dataset_from_file(
