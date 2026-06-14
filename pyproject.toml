@@ -25,6 +25,11 @@ hearsay = "hearsay.cli:app"
 mcp = [
     "mcp>=1.2",
 ]
+# Fast Apple-Silicon transcription engine (NVIDIA Parakeet on MLX). macOS arm64
+# only; on other platforms hearsay falls back to CPU Whisper automatically.
+parakeet = [
+    "parakeet-mlx>=0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -34,6 +39,7 @@ build-backend = "uv_build"
 dev = [
     "mcp>=1.2",
     "mypy>=2.1.0",
+    "parakeet-mlx>=0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "pytest>=9.0.3",
     "ruff>=0.15.17",
 ]
@@ -59,6 +65,11 @@ select = [
     "RUF", # ruff-specific
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# webui.py embeds a single-page HTML/CSS/JS asset as a string literal; line
+# length is meaningless there.
+"src/hearsay/webui.py" = ["E501"]
+
 [tool.mypy]
 files = ["src", "tests"]
 python_version = "3.11"
@@ -70,7 +81,7 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 # These third-party deps ship no type stubs or py.typed marker.
-module = ["faster_whisper.*", "feedparser.*"]
+module = ["faster_whisper.*", "feedparser.*", "parakeet_mlx.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

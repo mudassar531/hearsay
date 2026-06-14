@@ -6,7 +6,8 @@ lazily inside ``run_server``; ``hearsay mcp`` prints an install hint if missing.
 
 Configuration via environment (MCP tool signatures are fixed, so knobs live in
 the agent host's server config):
-  HEARSAY_MODEL   whisper model size for transcription (default "small")
+  HEARSAY_MODEL   transcription model: auto (default; Parakeet on Apple Silicon,
+                  else whisper-small), a parakeet alias, or a whisper size
   HEARSAY_LANG    default language code (default: English captions / auto-detect)
 """
 

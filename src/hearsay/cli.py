@@ -51,8 +51,16 @@ PITCH = (
 
 
 class ModelSize(StrEnum):
-    """Whisper model sizes, smallest (fastest) to largest (most accurate)."""
+    """Transcription model: ``auto``, Parakeet (MLX), or a Whisper size.
 
+    ``auto`` picks Parakeet on Apple Silicon (~3x faster) and falls back to
+    ``small`` Whisper elsewhere. Whisper sizes run smallest (fastest) to largest
+    (most accurate) on CPU.
+    """
+
+    auto = "auto"
+    parakeet = "parakeet"
+    parakeet_en = "parakeet-en"
     tiny = "tiny"
     base = "base"
     small = "small"
@@ -128,6 +136,25 @@ def mcp_command() -> None:
         raise typer.Exit(code=1) from exc
 
 
+@app.command("web", help="Run a simple local web UI in your browser.")
+def web_command(
+    host: Annotated[
+        str, typer.Option("--host", help="Address to bind.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8756,
+) -> None:
+    """Start the hearsay web UI (paste a URL or upload a file in the browser)."""
+    from hearsay.webui import run_server
+
+    try:
+        run_server(host=host, port=port)
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except OSError as exc:
+        err_console.print(f"[red]Could not start the web server:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("ingest", help=PITCH)
 def ingest(
     source: Annotated[
@@ -167,7 +194,10 @@ def ingest(
     ] = False,
     model: Annotated[
         ModelSize,
-        typer.Option("--model", help="Whisper model size for transcription."),
+        typer.Option(
+            "--model",
+            help="Transcription model: auto (fastest available), parakeet, or a whisper size.",
+        ),
     ] = _DEFAULT_MODEL,
     vad: Annotated[
         bool,
@@ -263,7 +293,7 @@ def _run_single(document: Document, default_name: str, opts: _Options) -> None:
 
 
 def _ingest_file(path: Path, opts: _Options) -> Document:
-    with _progress(f"Transcribing {path.name} with whisper '{opts.model}'") as cb:
+    with _progress(f"Transcribing {path.name} with '{opts.model}'") as cb:
         return ingest_file(
             path,
             model_size=opts.model,
@@ -288,9 +318,7 @@ def _ingest_youtube_source(url: str, opts: _Options) -> Document:
 
 def _transcribe_youtube(url: str, opts: _Options, *, forced: bool) -> Document:
     why = "Transcribing" if forced else "Downloading audio, then transcribing"
-    console.print(
-        f"[dim]{why} locally with whisper '{opts.model}'. This can take a few minutes.[/dim]"
-    )
+    console.print(f"[dim]{why} locally with '{opts.model}'. This can take a while.[/dim]")
     with _progress("Transcribing audio") as cb:
         return ingest_youtube_transcribe(
             url,
