@@ -17,6 +17,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -68,8 +69,17 @@ class ModelSize(StrEnum):
     large_v3 = "large-v3"
 
 
+class DatasetFormat(StrEnum):
+    """A dataset index format. ``ljspeech`` + ``jsonl`` are the default pair."""
+
+    ljspeech = "ljspeech"
+    jsonl = "jsonl"
+    hf = "hf"
+
+
 _DEFAULT_MODEL = ModelSize(DEFAULT_MODEL)
 _DEFAULT_OUTPUT_DIR = Path("./hearsay-out")
+_DEFAULT_DATASET_DIR = Path("./hearsay-dataset")
 
 
 class DefaultCommandGroup(TyperGroup):
@@ -151,6 +161,199 @@ def web_command(
     except OSError as exc:
         err_console.print(f"[red]Could not start the web server:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+@app.command("dataset", help="Build a TTS/STT training dataset from media (clips + manifests).")
+def dataset(
+    source: Annotated[
+        str,
+        typer.Argument(
+            metavar="SOURCE",
+            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
+            show_default=False,
+        ),
+    ],
+    out: Annotated[
+        Path, typer.Option("--out", help="Dataset output directory.")
+    ] = _DEFAULT_DATASET_DIR,
+    fmt: Annotated[
+        list[DatasetFormat] | None,
+        typer.Option(
+            "--format",
+            help="Index format(s), repeatable. Default: ljspeech + jsonl.",
+            show_default=False,
+        ),
+    ] = None,
+    sample_rate: Annotated[
+        int, typer.Option("--sample-rate", help="Output WAV rate (Hz): 22050 TTS, 16000 ASR.")
+    ] = 22050,
+    segment_min: Annotated[
+        float, typer.Option("--segment-min", help="Minimum clip length (seconds).")
+    ] = 1.0,
+    segment_max: Annotated[
+        float, typer.Option("--segment-max", help="Maximum clip length (seconds).")
+    ] = 15.0,
+    language: Annotated[
+        str | None,
+        typer.Option(
+            "--lang", help="Target language (transcription + filter).", show_default=False
+        ),
+    ] = None,
+    model: Annotated[
+        ModelSize, typer.Option("--model", help="Transcription model.")
+    ] = _DEFAULT_MODEL,
+    vad: Annotated[
+        bool, typer.Option("--vad/--no-vad", help="Voice-activity filter (Whisper).")
+    ] = True,
+    normalize: Annotated[
+        bool, typer.Option("--normalize", help="EBU R128 loudness-normalize each clip.")
+    ] = False,
+    no_filter: Annotated[
+        bool, typer.Option("--no-filter", help="Disable the quality filters (keep every clip).")
+    ] = False,
+    diarize: Annotated[
+        bool,
+        typer.Option("--diarize", help="Label speakers (needs the diarize extra + an HF token)."),
+    ] = False,
+    per_speaker: Annotated[
+        bool, typer.Option("--per-speaker", help="Diarize and also emit a per-speaker index.")
+    ] = False,
+    dominant_speaker: Annotated[
+        bool,
+        typer.Option("--dominant-speaker", help="Diarize and keep only the most-spoken speaker."),
+    ] = False,
+    hf_token: Annotated[
+        str | None,
+        typer.Option(
+            "--hf-token", help="HF token for diarization (else HF_TOKEN).", show_default=False
+        ),
+    ] = None,
+    min_speakers: Annotated[
+        int | None, typer.Option("--min-speakers", help="Diarization hint.", show_default=False)
+    ] = None,
+    max_speakers: Annotated[
+        int | None, typer.Option("--max-speakers", help="Diarization hint.", show_default=False)
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Batch: cap items from a playlist/feed.", show_default=False),
+    ] = None,
+    no_resume: Annotated[
+        bool, typer.Option("--no-resume", help="Batch: don't reuse a previous run's clips.")
+    ] = False,
+) -> None:
+    """Build a TTS/STT dataset from SOURCE into --out."""
+    from hearsay.dataset.build import (
+        build_dataset_from_feed,
+        build_dataset_from_file,
+        build_dataset_from_playlist,
+        build_dataset_from_youtube,
+    )
+    from hearsay.dataset.models import DatasetConfig, DiarizeConfig, FilterConfig
+
+    language = language or None  # treat --lang "" like an omitted flag (auto-detect)
+    mode = "per_speaker" if per_speaker else "dominant" if dominant_speaker else "tag"
+    config_kwargs: dict = {} if not fmt else {"formats": [f.value for f in fmt]}
+    config = DatasetConfig(
+        out_dir=out,
+        sample_rate=sample_rate,
+        segment_min_s=segment_min,
+        segment_max_s=segment_max,
+        normalize=normalize,
+        filters=FilterConfig(enabled=not no_filter, target_language=language or "en"),
+        diarize=DiarizeConfig(
+            enabled=diarize or per_speaker or dominant_speaker,
+            mode=mode,
+            hf_token=hf_token,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        ),
+        **config_kwargs,
+    )
+    m = model.value
+    try:
+        path = Path(source).expanduser()
+        if path.is_file():
+            report: object = _with_status(
+                f"Building dataset from {path.name}",
+                lambda: build_dataset_from_file(
+                    path, config=config, model_size=m, language=language, vad_filter=vad
+                ),
+            )
+        elif extract_playlist_id(source) is not None:
+            report = build_dataset_from_playlist(
+                source,
+                config=config,
+                model_size=m,
+                language=language,
+                vad_filter=vad,
+                limit=limit,
+                on_item=_announce_source,
+                resume=not no_resume,
+            )
+        elif extract_video_id(source) is not None:
+            report = _with_status(
+                "Building dataset",
+                lambda: build_dataset_from_youtube(
+                    source, config=config, model_size=m, language=language, vad_filter=vad
+                ),
+            )
+        elif source.startswith(("http://", "https://")):
+            report = build_dataset_from_feed(
+                source,
+                config=config,
+                model_size=m,
+                language=language,
+                vad_filter=vad,
+                limit=limit,
+                on_item=_announce_source,
+                resume=not no_resume,
+            )
+        else:
+            report = _with_status(
+                f"Building dataset from {path.name}",
+                lambda: build_dataset_from_file(
+                    path, config=config, model_size=m, language=language, vad_filter=vad
+                ),
+            )
+        _print_dataset_summary(report)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Interrupted.[/yellow]")
+        raise typer.Exit(code=130) from None
+    except HearsayError as exc:
+        _print_error(exc)
+        raise typer.Exit(code=1) from exc
+
+
+def _with_status(label: str, func: Callable[[], object]) -> object:
+    """Run ``func`` under a rich status spinner (single-source dataset builds)."""
+    with console.status(f"[bold]{label}…", spinner="dots"):
+        return func()
+
+
+def _announce_source(index: int, total: int, src: object) -> None:
+    label = getattr(src, "label", "")
+    console.print(f"[bold blue]\\[{index}/{total}][/bold blue] {label}")
+
+
+def _print_dataset_summary(report: object) -> None:
+    """Print a dataset build summary (works for single and combined reports)."""
+    clip_count = report.clip_count  # type: ignore[attr-defined]
+    duration = format_timestamp(report.total_duration_s)  # type: ignore[attr-defined]
+    dropped = report.dropped_count  # type: ignore[attr-defined]
+    body = (
+        f"[bold green]✓[/bold green] {clip_count} clips · {duration} · "
+        f"dropped {dropped}\n→ [bold]{report.out_dir}/[/bold]"  # type: ignore[attr-defined]
+    )
+    sources = getattr(report, "sources", None)
+    if sources is not None:
+        ok = sum(1 for s in sources if s.ok)
+        body += f"\n[dim]{ok}/{len(sources)} sources[/dim]"
+    console.print(Panel.fit(body, title="hearsay dataset", border_style="green"))
+    if report.drops_by_reason:  # type: ignore[attr-defined]
+        console.print(f"[dim]dropped by: {report.drops_by_reason}[/dim]")  # type: ignore[attr-defined]
+    for warning in report.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]![/yellow] {escape(warning)}")  # may contain "hearsay[diarize]"
 
 
 @app.command("ingest", help=PITCH)
@@ -535,7 +738,9 @@ def _print_success(document: Document, destination: Path) -> None:
 
 
 def _print_error(exc: HearsayError) -> None:
-    body = f"[red]{exc.message}[/red]"
+    # Escape dynamic text: messages/hints can contain brackets (e.g. "hearsay[diarize]")
+    # that Rich would otherwise parse as markup.
+    body = f"[red]{escape(exc.message)}[/red]"
     if exc.hint:
-        body += f"\n\n[bold]Try:[/bold] {exc.hint}"
+        body += f"\n\n[bold]Try:[/bold] {escape(exc.hint)}"
     err_console.print(Panel.fit(body, title="hearsay error", border_style="red"))
