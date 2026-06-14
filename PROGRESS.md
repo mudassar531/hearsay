@@ -528,14 +528,46 @@ TOTAL: clips 63 · 7.9 min · sources ok 2/2 · dropped 0
   invariant: WAVs on disk (63) == manifest references (63)  ✓
 ```
 
-## PHASE D5 — Optional diarization (single-speaker TTS)
+- [x] `hearsay[diarize]` extra (`pyannote.audio>=4.0`, lazy-imported; kept out of core **and** the dev/test group so CI stays offline); clean degrade to a mixed-speaker dataset + warning when absent — verified: `find_spec` degrade path + `test_degrades_to_mixed_speaker_when_not_installed`
+- [x] Per-speaker / dominant-speaker / tag export modes (`DiarizeConfig.mode`): `dominant` keeps each source's most-spoken speaker, `per_speaker` emits per-speaker manifests over the shared `wavs/`; cross-speaker clips dropped below `min_purity` — verified: tag/dominant/per_speaker + cross-speaker tests (the CLI flag *names* `--per-speaker`/`--dominant-speaker` are wired in D6)
+- [x] HF token via `DiarizeConfig.hf_token` → `HF_TOKEN` → `HUGGING_FACE_HUB_TOKEN`; load/auth failure raises an actionable `DiarizationError` (accept the model's conditions + create a READ token) — verified: `resolve_token` + not-installed-error tests
+- [x] Tests: pure max-overlap assignment + purity, dominant, degrade, cross-speaker drop, pyannote 4.x `DiarizeOutput` / 3.x `Annotation` parsing (fake pipeline), per-source speaker namespacing in a combined build — verified: 16 diarization tests pass offline
 
-- [ ] `hearsay[diarize]` extra (pyannote.audio / whisperx, lazy-imported); clean degrade with a clear warning when absent
-- [ ] `--per-speaker` (one sub-dataset/manifest per speaker) and `--dominant-speaker` (keep the most-spoken speaker)
-- [ ] HF token via `HF_TOKEN`/`--hf-token`; on auth failure print exact remediation (accept conditions on both gated repos + create read token)
-- [ ] Tests: mixed-speaker default + degrade path; speaker-label assignment by max temporal overlap (mock/fixture)
+**Acceptance:** with the extra, a 2-speaker fixture yields per-speaker (or dominant-only) clips; without it, a clear mixed-speaker warning.
 
-**Acceptance:** with the extra, a 2-speaker fixture yields per-speaker (or dominant-only) clips; without it, a clear mixed-speaker warning. **STOP.**
+### Phase D5 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The pyannote 4.x adapter was
+built against a web-verified API (it can't be live-tested in CI — heavy + gated +
+network), then an independent 3-lens adversarial review verified the code. It found
+**1 real bug** — `_state_fingerprint` ignored the `diarize` config, so resume would
+reuse stale clips across a diarization change — now fixed (the fingerprint includes
+diarize, minus the token). 7 improvements applied: wrap the pyannote output parsing in
+an actionable error (API-drift safety), validate `DiarizeConfig.mode`, annotate
+`_load`, and add tests for the 4.x/3.x/malformed parse paths, mode validation,
+fingerprint invalidation, and combined per-source speaker namespacing.
+
+```text
+$ uv run pytest tests/test_dataset_diarize.py
+16 passed
+
+$ uv run pytest            # full suite — markdown/JSON path + D1-D4 unchanged
+286 passed in 13.59s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   50 files already formatted   Success: no issues found in 48 source files
+```
+
+**Offline acceptance (fake diarizer; 2 speakers SPEAKER_00=[0,2.5], SPEAKER_01=[2.5,4.5]):**
+`tag` → both clips labelled `sample:SPEAKER_00` / `sample:SPEAKER_01`; `dominant` → only
+`sample:SPEAKER_00` kept (other dropped `non_dominant_speaker`, WAV removed); `per_speaker`
+→ `manifest.sample-SPEAKER_00.jsonl` + `…SPEAKER_01.jsonl`; a 50/50 cross-speaker clip
+dropped (`cross_speaker`); **without the extra** → mixed-speaker dataset + the warning.
+
+**Live acceptance (real pyannote) — handed to the user** (multi-GB, HF-gated, can't run
+in CI). Run after: (1) `uv tool install "hearsay[diarize]"`; (2) accept conditions at
+https://hf.co/pyannote/speaker-diarization-community-1 ; (3) `export HF_TOKEN=...` (the
+gitignored `local.env`). Then a real 2-speaker clip diarizes into per-speaker / dominant clips.
 
 ## PHASE D6 — Both front ends + docs
 
