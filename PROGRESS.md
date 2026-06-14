@@ -436,12 +436,49 @@ Manifest durations exactly match the probed WAV durations (audio↔text↔durati
 
 ## PHASE D3 — Quality filtering
 
-- [ ] Tier-1 filters (default on, no heavy deps): duration `[1,15]s`, edge/internal silence, ASR confidence (`avg_logprob<-1.0` / `no_speech_prob>0.6` / `compression_ratio>2.4`), language match (`!=target & prob>=0.5`, min-duration gated), text sanity (empty / chars-per-sec ~5–25 per-language / non-target script)
-- [ ] Structured per-clip drop log (`dropped.jsonl`: clip, filter, value, threshold) + kept/dropped summary by reason; thresholds config-overridable
-- [ ] Optional Tier-2 (off by default): Silero VAD via already-present `onnxruntime` / `webrtcvad-wheels`; SNR; clipping
-- [ ] Tests on fixtures with deliberately bad segments (too short/long, silent, wrong-language, garbage text)
+- [x] Tier-1 filters (default on, no heavy deps, engine-agnostic): duration `[1,15]s`, internal-silence gap (>2s, glitch-resistant), **confidence** (mean per-word, an engine-agnostic proxy for `avg_logprob`/`no_speech_prob` — clips are word-regrouped & Parakeet has no segment logprobs; see DECISIONS), **compression_ratio** (Whisper's gzip formula, on text), **non_target_script** + chars-per-second (dep-free language proxy; per-language, skipped for CJK/unmapped) — verified: 20 filter tests
+- [x] Structured per-clip drop log (`dropped.jsonl`: clip, filter, value, threshold, text) + `BuildReport.dropped_count`/`drops_by_reason`; thresholds config-overridable via `FilterConfig`; `--no-filter` = `FilterConfig(enabled=False)` — verified: build-integration test + live demo
+- [x] Optional Tier-2 (off by default): clipping detection (dep-free, stdlib `wave` + numpy; both rails). Silero VAD / SNR deferred to an optional `hearsay[dataset]` extra (VAD needs a bundled model; kept core dep-free) — logged in DECISIONS — verified: clipping tests (incl. negative rail)
+- [x] Tests on deliberately bad segments (too short/long, silent join, wrong-script, garbage/repetitive, low-confidence) — verified: 20 filter unit tests + 2 build-integration tests
 
-**Acceptance:** filters drop the bad fixtures with correct logged reasons; summary prints kept/dropped counts. **STOP.**
+**Acceptance:** filters drop the bad fixtures with correct logged reasons; summary reports kept/dropped counts.
+
+### Phase D3 Evidence
+
+Run on 2026-06-14 (macOS, uv 0.11.17, Python 3.11.15). The filters were
+implemented from design memo §4 (with the Step-Zero corrections) then verified by
+an independent 4-lens adversarial review (the false-positive lens hit a transient
+content-filter API error and was re-checked by hand — see below). It caught **2 real
+bugs**, both fixed: (1) the clipping detector missed the **negative rail**
+(`np.abs(int16 -32768)` overflows) — now widened to int32; (2) a glitched far-future
+word end **masked a real internal silence** — the word end is now capped at a
+plausible max so the join is still caught. 6 improvements applied (deterministic
+strict-majority script test, char-rate skipped for unmapped scripts, doc/keying
+accuracy, extra tests).
+
+```text
+$ uv run pytest tests/test_dataset_filters.py
+20 passed in 0.10s
+
+$ uv run pytest            # full suite — markdown/JSON path unchanged
+256 passed in 9.90s
+
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+All checks passed!   45 files already formatted   Success: no issues found in 45 source files
+```
+
+**Acceptance — filters drop bad clips with logged reasons + summary** (within the fixture):
+
+```text
+SUMMARY: kept 1 · dropped 1 · by reason {'non_target_script': 1}
+dropped.jsonl: {"clip":"demo_seg0001","filter":"non_target_script","value":"cjk","threshold":"latin","text":"你好 世界 今天 天气"}
+metadata.csv:  demo_0001|Hello there friend|Hello there friend
+```
+
+**False-positive check (hand-run, covering the lens that errored):** default Tier-1
+filters on the real `sample.wav` speech (tiny model) kept the clip, **dropped 0** — the
+confidence (0.30), char-rate (5–25/s) and compression (2.4) defaults don't nuke clean
+speech.
 
 ## PHASE D4 — Scale: playlists / channels / feeds → one merged dataset
 
