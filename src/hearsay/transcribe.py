@@ -22,6 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+from faster_whisper.tokenizer import _LANGUAGE_CODES
+
 from hearsay.errors import TranscriptionError
 from hearsay.models import Segment, Word
 
@@ -40,8 +42,62 @@ PARAKEET_MODELS = {
 
 # Whisper size used when ``auto`` falls back off Parakeet.
 DEFAULT_WHISPER = "small"
+# Parakeet TDT 0.6b v3 is multilingual over exactly these 25 European languages. It does
+# not refuse anything else — it transliterates it into confident nonsense, so an Urdu or
+# Arabic recording comes back as fluent-looking Latin gibberish with no error anywhere.
+# `auto` therefore must not hand it audio in a language it cannot read.
+PARAKEET_LANGUAGES = frozenset(
+    [
+        "bg",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "fi",
+        "fr",
+        "hr",
+        "hu",
+        "it",
+        "lt",
+        "lv",
+        "mt",
+        "nl",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sl",
+        "sv",
+        "uk",
+    ]
+)
+# Whisper size used purely to identify the language before picking an engine: the
+# smallest checkpoint is enough to tell Urdu from German, and it looks at one window.
+_DETECT_WHISPER = "tiny"
+# Below this confidence the guess is worth less than the default, so it is discarded.
+_DETECT_MIN_PROBABILITY = 0.35
+
+# The codes Whisper accepts, and the handful of English names people reach for instead
+# (a full name table would be a new dependency for a typo hint).
+_WHISPER_LANGUAGE_CODES = frozenset(_LANGUAGE_CODES)
+_NAMED_LANGUAGES = {
+    "urdu": "ur", "arabic": "ar", "hindi": "hi", "english": "en", "spanish": "es",
+    "french": "fr", "german": "de", "chinese": "zh", "mandarin": "zh", "japanese": "ja",
+    "korean": "ko", "russian": "ru", "portuguese": "pt", "italian": "it", "dutch": "nl",
+    "turkish": "tr", "persian": "fa", "farsi": "fa", "punjabi": "pa", "bengali": "bn",
+    "uzbek": "uz", "pashto": "ps", "sindhi": "sd", "tamil": "ta", "telugu": "te",
+    "indonesian": "id", "vietnamese": "vi", "thai": "th", "polish": "pl", "ukrainian": "uk",
+}  # fmt: skip
 # Default model: resolve the fastest available engine at transcription time.
 DEFAULT_MODEL = "auto"
+# ISO 639-2 "undetermined": the engine transcribed the audio but cannot name its
+# language. Downstream, an unknown language disables the language-specific filters
+# rather than guessing at them.
+UNKNOWN_LANGUAGE = "und"
 
 # Long files are transcribed in overlapping windows so progress can be reported
 # and memory stays bounded; shorter files run in a single pass.
@@ -102,19 +158,43 @@ def transcribe_audio(
             offline, or Parakeet requested but not installed) or the file could
             not be decoded.
     """
-    engine, identifier = _resolve_engine(model_size)
+    # With no stated language, `auto` cannot know whether Parakeet can read this audio.
+    # Identify it first with the smallest Whisper checkpoint (one window, ~40 MB) —
+    # otherwise a Naat, a Quran recitation, or any Hindi/Chinese/Japanese recording comes
+    # back as confident Latin nonsense that no downstream check can spot.
+    language = normalize_language(language)
+    detected: str | None = None
+    if model_size == "auto" and language is None and _parakeet_available():
+        detected = detect_language(path, local_files_only=local_files_only)
+        # Parakeet cannot detect at all, so there it *is* the label; Whisper re-detects.
+    engine, identifier = _resolve_engine(model_size, language or detected)
     if engine == "parakeet":
-        return _transcribe_parakeet(
-            path,
-            repo_id=identifier,
-            language=language,
-            local_files_only=local_files_only,
-            word_timestamps=word_timestamps,
-            on_progress=on_progress,
-        )
+        try:
+            return _transcribe_parakeet(
+                path,
+                repo_id=identifier,
+                language=language,
+                local_files_only=local_files_only,
+                word_timestamps=word_timestamps,
+                on_progress=on_progress,
+            )
+        except TranscriptionError:
+            # `auto` promises "the fastest engine that works here", so a Parakeet that
+            # is importable but cannot actually run (no network for the ~2.5 GB weights,
+            # a corrupt cache, an MLX/OS mismatch) must fall through to Whisper rather
+            # than leave the machine with no transcription at all. An explicitly named
+            # engine still fails loudly — a deliberate choice is never downgraded.
+            if model_size != "auto":
+                raise
+            identifier = DEFAULT_WHISPER
     return _transcribe_whisper(
         path,
         model_size=identifier,
+        # Deliberately NOT `language or detected`: the probe runs on the *tiny*
+        # checkpoint and only has to be right enough to pick an engine. Whisper detects
+        # again during the real decode with the model actually being used, which is
+        # strictly better — forcing the probe's guess turned a Cyrillic Uzbek news
+        # bulletin (mis-guessed as Persian) into Arabic-script nonsense.
         language=language,
         local_files_only=local_files_only,
         vad_filter=vad_filter,
@@ -123,15 +203,60 @@ def transcribe_audio(
     )
 
 
-def _resolve_engine(model_size: str) -> tuple[str, str]:
+def detect_language(path: Path, *, local_files_only: bool = False) -> str | None:
+    """Identify the spoken language of ``path``, or None if it cannot be determined.
+
+    Uses the smallest Whisper checkpoint over a single window — enough to tell Urdu from
+    German, which is all the engine picker needs. Detection failing is never fatal: the
+    caller falls back to its normal default.
+    """
+    try:
+        from faster_whisper.audio import decode_audio
+
+        model = _load_whisper(_DETECT_WHISPER, local_files_only=local_files_only)
+        language, probability, _ = model.detect_language(
+            audio=decode_audio(str(path), sampling_rate=16000)
+        )
+    except Exception:  # a probe is an optimisation, never a reason to fail the job
+        return None
+    return language if probability >= _DETECT_MIN_PROBABILITY else None
+
+
+def normalize_language(language: str | None) -> str | None:
+    """Validate a language code, or raise with the codes that would have worked.
+
+    Whisper takes ISO-639-1 codes, not names: ``--lang urdu`` used to reach the decoder
+    and come back as a wall of 100 codes under "check the file is valid audio", which
+    blames the file for a typo in a flag.
+    """
+    if language is None:
+        return None
+    code = language.strip().lower().replace("_", "-")
+    if not code:
+        return None
+    if code in _WHISPER_LANGUAGE_CODES:
+        return code
+    base = code.split("-", 1)[0]  # "en-GB" -> "en"
+    if base in _WHISPER_LANGUAGE_CODES:
+        return base
+    guess = _NAMED_LANGUAGES.get(code)
+    raise TranscriptionError(
+        f"Unknown language code: {language!r}." + (f" Did you mean '{guess}'?" if guess else ""),
+        hint="Use an ISO-639-1 code such as en, es, ur, ar, hi, zh, ru, uz — "
+        "or leave --lang off to detect it automatically.",
+    )
+
+
+def _resolve_engine(model_size: str, language: str | None = None) -> tuple[str, str]:
     """Map a model name to an ``(engine, identifier)`` pair.
 
-    ``auto`` resolves to Parakeet when it is importable, else Whisper. An
-    explicit Parakeet alias stays Parakeet (and fails loudly later if it cannot
-    load), so an explicit choice is never silently downgraded.
+    ``auto`` resolves to Parakeet when it is importable *and* can read ``language``,
+    else Whisper — Parakeet covers 25 European languages and silently transliterates
+    anything else. An explicit Parakeet alias stays Parakeet (and fails loudly later if
+    it cannot load), so an explicit choice is never silently downgraded.
     """
     if model_size == "auto":
-        if _parakeet_available():
+        if _parakeet_available() and (language is None or language in PARAKEET_LANGUAGES):
             return "parakeet", PARAKEET_MODELS["parakeet"]
         return "whisper", DEFAULT_WHISPER
     if model_size in PARAKEET_MODELS:
@@ -143,6 +268,18 @@ def _resolve_engine(model_size: str) -> tuple[str, str]:
         f"Unknown transcription model: {model_size!r}",
         hint=f"Choose one of: auto, {', '.join(PARAKEET_MODELS)}, {', '.join(WHISPER_SIZES)}",
     )
+
+
+def resolve_method(model_size: str) -> str:
+    """The ``method`` label a transcription with ``model_size`` will report.
+
+    Resolves ``auto`` the same way the engine picker does, so a caller can reason
+    about the engine actually about to run (e.g. to warn that a checkpoint is too
+    small for reliable word alignment) before paying for a transcription.
+    """
+    engine, identifier = _resolve_engine(model_size)
+    # Parakeet labels itself with the bare repo name, Whisper with its size.
+    return identifier.split("/")[-1] if engine == "parakeet" else f"whisper-{identifier}"
 
 
 def _parakeet_available() -> bool:
@@ -187,7 +324,7 @@ def _transcribe_parakeet(
         )
     except Exception as exc:
         raise TranscriptionError(
-            f"Could not transcribe {path}: {exc}",
+            f"Could not transcribe {path.name}: {exc}",
             hint="Check the file is a valid audio/video file and ffmpeg is installed.",
         ) from exc
 
@@ -216,7 +353,13 @@ def _transcribe_parakeet(
         words = words_from_parakeet(result.tokens)
     return TranscriptionResult(
         segments=segments,
-        language=language or "en",
+        # Parakeet's result carries no detected language, and the multilingual model
+        # covers 25 European languages — several non-Latin. Reporting "en" on an
+        # unlabelled Russian or Greek recording would be a confident lie, and the
+        # dataset filters trust this value to pick a target script: they would then
+        # drop every clip as wrong-script. "und" is the honest answer, and it makes
+        # the script filter stand down rather than mis-fire. Pass --lang to label it.
+        language=language or UNKNOWN_LANGUAGE,
         duration_s=duration_s,
         model_size=label,
         method=label,
@@ -345,7 +488,7 @@ def _transcribe_whisper(
                 on_progress(min(seg.end, info.duration), info.duration)
     except Exception as exc:
         raise TranscriptionError(
-            f"Could not transcribe {path}: {exc}",
+            f"Could not transcribe {path.name}: {exc}",
             hint="Check the file is a valid audio/video file and ffmpeg is installed.",
         ) from exc
 

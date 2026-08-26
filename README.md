@@ -105,11 +105,17 @@ training pipelines read directly.
 # A short video → a dataset folder (LJSpeech metadata.csv + NeMo manifest.jsonl + wavs/)
 hearsay dataset "https://youtu.be/VIDEO_ID" --out ./voice-data
 
+# Any site yt-dlp supports — Dailymotion, SoundCloud, Twitch, ~1800 more
+hearsay dataset "https://www.dailymotion.com/video/VIDEO_ID" --out ./voice-data
+
 # A whole playlist / channel / podcast feed → one merged dataset
 hearsay dataset "https://example.com/feed.xml" --out ./speech-data
 
-# 16 kHz mono for ASR, custom clip length, also emit a HuggingFace audiofolder index
-hearsay dataset talk.mp3 --sample-rate 16000 --segment-min 2 --segment-max 12 --format hf
+# 16 kHz mono for ASR, custom clip length
+hearsay dataset talk.mp3 --sample-rate 16000 --segment-min 2 --segment-max 12
+
+# A HuggingFace audiofolder index (on its own — see the note below)
+hearsay dataset talk.mp3 --format hf --format jsonl
 ```
 
 You get a portable folder, ready to point a trainer at:
@@ -124,10 +130,23 @@ voice-data/
   dropped.jsonl                 # every filtered-out clip, with the reason
 ```
 
+- **Any source yt-dlp reaches.** Metadata and audio both come from yt-dlp, so a
+  Dailymotion, SoundCloud or Twitch link works exactly like a YouTube one. A playlist
+  or feed merges into a single dataset.
 - **Word-accurate, click-free cuts.** Clips are sliced on word-level timestamps
   (faster-whisper `word_timestamps`, or Parakeet on Apple Silicon), padded a little
   on each edge (`--pad`) and given a short fade so boundaries never click or clip a
   phoneme.
+- **Pick a model that can align.** `auto` (Parakeet on Apple Silicon, else
+  `whisper-small`) is right for training data. `--model tiny`/`base` are fine for
+  *reading* a transcript but their word-alignment pass can omit an audible word,
+  pairing a clip with text that is missing it — hearsay warns when you use one.
+- **Language is detected, not assumed.** The script and speaking-rate filters follow
+  the language transcription detected, so non-English and non-Latin sources build
+  normally; pass `--lang` only to force one.
+- **`--format hf` wants its own folder.** HuggingFace `audiofolder` refuses a tree
+  containing both a `metadata.csv` and a `metadata.jsonl`, so pair `hf` with `jsonl`
+  rather than with the default `ljspeech` (hearsay warns if you mix them).
 - **Quality filtering** (on by default) drops junk — too short/long, internal silence,
   wrong-script or odd speaking-rate text, repetition, low ASR confidence — and logs
   every drop with its reason to `dropped.jsonl`. `--no-filter` keeps everything.
@@ -220,8 +239,9 @@ hearsay web --host 0.0.0.0       # expose on your LAN (unauthenticated — caref
   <img src="demo/webui.gif" alt="hearsay web UI" width="80%">
 </p>
 
-Single video URLs and file uploads go through the UI; for playlists and podcast feeds,
-use the CLI (the UI shows a friendly hint).
+Videos, playlists, podcast feeds and file uploads all go through the UI. Batch sources
+are capped at the first 5 items in the browser (the whole build streams back in one
+response) — use the CLI for a full playlist or a hundred-episode feed.
 
 ## Transcription engines
 

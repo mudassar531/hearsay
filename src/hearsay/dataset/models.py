@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from hearsay.models import Word
 
@@ -78,7 +78,10 @@ class FilterConfig(BaseModel):
     min_avg_confidence: float = 0.30  # mean word confidence floor (~avg_logprob -1.0)
     min_chars_per_s: float = 5.0
     max_chars_per_s: float = 25.0
-    target_language: str = "en"
+    # None = follow the source's detected language. The script/char-rate filters are
+    # language-specific, so pinning a default here would judge every source as if it
+    # were English and drop non-Latin audio wholesale.
+    target_language: str | None = None
     require_target_script: bool = True  # drop clips whose text is mostly the wrong script
     detect_clipping: bool = False  # Tier-2: read the WAV and drop clipped clips (opt-in)
 
@@ -124,6 +127,32 @@ class DatasetConfig(BaseModel):
     fade_s: float = Field(default=0.01, ge=0)  # short in/out fade that de-clicks the cut edges
     filters: FilterConfig = Field(default_factory=FilterConfig)
     diarize: DiarizeConfig = Field(default_factory=DiarizeConfig)
+
+    @model_validator(mode="after")
+    def _check_segment_bounds(self) -> DatasetConfig:
+        """Reject an inverted clip-length window instead of silently building junk.
+
+        Each field is individually valid when ``--segment-min`` exceeds
+        ``--segment-max``, so without this the build runs to completion and emits a
+        near-empty dataset whose clips were all rejected by the duration filter —
+        looking like "this media had nothing usable" rather than a bad flag.
+        """
+        if self.segment_min_s > self.segment_max_s:
+            raise ValueError(
+                f"--segment-min ({self.segment_min_s:g}s) must not exceed "
+                f"--segment-max ({self.segment_max_s:g}s)"
+            )
+        # The segmenter cuts to [segment_min_s, segment_max_s], then the duration filter
+        # re-checks the result against its own bounds. Left at their standalone defaults
+        # (1-15s) those bounds silently reject everything the user asked for — e.g.
+        # `--segment-min 16 --segment-max 30` yields "0 clips" under a green success
+        # tick. Only bounds the caller set explicitly are preserved.
+        explicit = self.filters.model_fields_set
+        if "min_duration_s" not in explicit:
+            self.filters.min_duration_s = self.segment_min_s
+        if "max_duration_s" not in explicit:
+            self.filters.max_duration_s = self.segment_max_s
+        return self
 
 
 class DropRecord(BaseModel):

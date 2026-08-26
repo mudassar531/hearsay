@@ -18,10 +18,12 @@ is not installed the build degrades cleanly to a mixed-speaker dataset with a wa
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from hearsay.dataset.audio import decode_to_wav
 from hearsay.dataset.models import DiarizeConfig
 from hearsay.errors import DiarizationError
 
@@ -129,13 +131,20 @@ class PyannoteDiarizer:
             kwargs["min_speakers"] = self._config.min_speakers
         if self._config.max_speakers is not None:
             kwargs["max_speakers"] = self._config.max_speakers
-        try:
-            result = self._pipeline(str(audio_path), **kwargs)
-        except Exception as exc:
-            raise DiarizationError(
-                f"Diarization failed for {audio_path}: {exc}",
-                hint="Check the audio is valid and ffmpeg is installed (torchcodec needs it).",
-            ) from exc
+        # Always diarize a decoded PCM WAV, never the original container. pyannote 4.x
+        # reads fixed windows computed from the reported duration, and a compressed
+        # source (MP3/M4A — i.e. every podcast enclosure) decodes to a frame-quantized
+        # sample count that can fall short of that window, which it raises on. Decoding
+        # once up front also matches the 16 kHz mono the models run at.
+        with tempfile.TemporaryDirectory(prefix="hearsay-diarize-") as tmp:
+            wav = decode_to_wav(audio_path, Path(tmp) / "diarize.wav")
+            try:
+                result = self._pipeline(str(wav), **kwargs)
+            except Exception as exc:
+                raise DiarizationError(
+                    f"Diarization failed for {audio_path}: {exc}",
+                    hint="Check the audio is valid and ffmpeg is installed (torchcodec needs it).",
+                ) from exc
         # pyannote 4.x returns a DiarizeOutput dataclass; 3.x returned a bare Annotation.
         # Wrap parsing too, so a future API shape-shift degrades to an actionable error.
         try:

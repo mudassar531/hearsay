@@ -46,10 +46,15 @@ from hearsay.dataset.models import (
     SourceResult,
 )
 from hearsay.dataset.segmentation import segment_words
-from hearsay.errors import AudioDownloadError, AudioExportError, InvalidSourceError
+from hearsay.errors import AudioDownloadError, AudioExportError, HearsayError, InvalidSourceError
 from hearsay.feeds import Episode, Feed, download_episode, fetch_feed
 from hearsay.models import SourceMetadata, Word
-from hearsay.transcribe import DEFAULT_MODEL, TranscriptionResult, transcribe_audio
+from hearsay.transcribe import (
+    DEFAULT_MODEL,
+    TranscriptionResult,
+    resolve_method,
+    transcribe_audio,
+)
 from hearsay.youtube import (
     PlaylistEntry,
     download_audio,
@@ -69,13 +74,76 @@ SourceRunner = Callable[
 _STATE_FILE = "_state.json"
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+# The clip filenames hearsay generates: "<source_id>_NNNN.wav" (see _produce_clips).
+# Used to tell hearsay's own output apart from a user's files in the same folder.
+_CLIP_NAME = re.compile(r"^(.+)_\d{4}\.wav$")
 # A clip shorter than this (after slicing) is a near-empty ffmpeg artifact, not audio.
 _MIN_CLIP_S = 0.01
+# A few unreadable stretches in a long recording are normal and are logged as drops; a
+# source where slicing fails this often is broken, and failing loudly beats emitting a
+# quietly decimated dataset.
+_MAX_SLICE_FAILURE_RATE = 0.2
+_MIN_SLICE_FAILURES = 3
+# Whisper's smallest checkpoints are usable for reading a transcript but not for
+# building one: with word_timestamps=True their alignment pass can omit a word that is
+# plainly audible, and the clip then ships paired with a transcript missing it. That is
+# silent audio/text misalignment — exactly what corrupts a TTS/STT training run — and
+# no downstream filter can see it, because the text that survives is well-formed.
+_ALIGNMENT_RISK_MODELS = frozenset({"whisper-tiny", "whisper-base"})
+_ALIGNMENT_WARNING = (
+    "{method} is too small for reliable word alignment: it can drop audible words from "
+    "a clip's transcript, silently misaligning audio and text. Use --model small (or "
+    "larger, or parakeet on Apple Silicon) for datasets you intend to train on."
+)
 _MIXED_SPEAKER_WARNING = (
     "diarization not installed: this dataset contains MIXED speakers — fine for STT, "
     'but not single-voice TTS. Install "hearsay[diarize]" and set HF_TOKEN to enable '
     "per-speaker / dominant-speaker export."
 )
+
+
+def _with_detected_language(config: DatasetConfig, language: str) -> DatasetConfig:
+    """Pin the filters to ``language`` when the user didn't name one with ``--lang``.
+
+    The script and character-rate filters are language-specific. Leaving them on a
+    hardcoded "en" meant an Urdu, Arabic, Russian, Hindi or Chinese source had every
+    clip dropped as ``non_target_script`` — a silently empty dataset from a perfectly
+    good recording. Transcription already detects the language, so use it.
+    """
+    if config.filters.target_language is not None:
+        return config
+    return config.model_copy(
+        update={"filters": config.filters.model_copy(update={"target_language": language})}
+    )
+
+
+_HF_LJSPEECH_CLASH = (
+    "formats 'hf' and 'ljspeech' cannot share a dataset folder: HuggingFace "
+    "`audiofolder` scans the tree for a metadata index and refuses a mix of "
+    "extensions (\"Found metadata files with different extensions: ['.csv', "
+    "'.jsonl']\"), so metadata.csv makes metadata.jsonl unloadable. Build the "
+    "HuggingFace index on its own: --format hf (optionally with --format jsonl)."
+)
+
+
+def _format_warnings(formats: list[str]) -> list[str]:
+    """Warn about index formats that cannot coexist in one dataset folder."""
+    chosen = set(formats)
+    return [_HF_LJSPEECH_CLASH] if {"hf", "ljspeech"} <= chosen else []
+
+
+def _alignment_warnings(model_size: str) -> list[str]:
+    """Warn up front when the requested model is too small for word alignment.
+
+    Combined builds transcribe per source, so the warning is derived from the
+    *requested* model (resolving ``auto``) rather than from a result, letting it reach
+    the user before a long multi-source build rather than after it.
+    """
+    try:
+        method = resolve_method(model_size)
+    except HearsayError:  # unknown model — the transcriber reports it far better
+        return []
+    return [_ALIGNMENT_WARNING.format(method=method)] if method in _ALIGNMENT_RISK_MODELS else []
 
 
 def _resolve_diarizer(
@@ -131,6 +199,7 @@ def build_dataset(
     language: str = "en",
     source_platform: str = "local",
     diarizer: Diarizer | None = None,
+    transcription_method: str | None = None,
     version: str = __version__,
     now: Callable[[], str] = _utc_now_iso,
 ) -> BuildReport:
@@ -146,6 +215,9 @@ def build_dataset(
         ensure_filter("loudnorm")
     _make_wavs_dir(config.out_dir)
     diarizer, warnings = _resolve_diarizer(config, diarizer)
+    warnings += _format_warnings(config.formats)
+    if transcription_method in _ALIGNMENT_RISK_MODELS:
+        warnings.append(_ALIGNMENT_WARNING.format(method=transcription_method))
     src_rate = probe_sample_rate(source_audio)
     if 0 < src_rate < config.sample_rate:
         warnings.append(
@@ -158,7 +230,7 @@ def build_dataset(
         words,
         out_dir=config.out_dir,
         source_id=source_id,
-        config=config,
+        config=_with_detected_language(config, language),
         diarizer=diarizer,
     )
 
@@ -255,21 +327,42 @@ def _produce_clips(
 
     clips: list[DatasetClip] = []
     index = 0
+    slice_failures = 0
     for ref, seg, _duration in kept:
         start, end = spans[ref]
         index += 1
         clip_id = f"{source_id}_{index:04d}"
         rel = f"wavs/{clip_id}.wav"
         dest = out_dir / rel
-        slice_clip(
-            source_audio,
-            start,
-            end,
-            dest,
-            sample_rate=config.sample_rate,
-            normalize=config.normalize,
-            fade_s=config.fade_s,
-        )
+        try:
+            slice_clip(
+                source_audio,
+                start,
+                end,
+                dest,
+                sample_rate=config.sample_rate,
+                normalize=config.normalize,
+                fade_s=config.fade_s,
+            )
+        except AudioExportError as exc:
+            # One unreadable stretch of a long recording used to abort the whole source,
+            # throwing away every clip already cut from it. Log the clip and keep going;
+            # a genuinely broken file trips the failure ceiling below instead.
+            dest.unlink(missing_ok=True)
+            index -= 1
+            slice_failures += 1
+            drops.append(
+                DropRecord(
+                    clip=ref,
+                    filter="slice_failed",
+                    value=str(exc.message)[:80],
+                    threshold="ffmpeg ok",
+                    text=seg.text[:80],
+                )
+            )
+            if slice_failures > max(_MIN_SLICE_FAILURES, len(kept) * _MAX_SLICE_FAILURE_RATE):
+                raise
+            continue
         duration_s = probe_duration(dest)
         if duration_s <= _MIN_CLIP_S:
             dest.unlink(missing_ok=True)  # empty/near-empty slice — don't record it
@@ -385,12 +478,13 @@ def build_dataset_from_file(
         config=config,
         language=result.language,
         source_platform="local",
+        transcription_method=result.method,
         version=version,
         now=now,
     )
 
 
-def build_dataset_from_youtube(
+def build_dataset_from_media_url(
     url: str,
     *,
     config: DatasetConfig,
@@ -403,7 +497,11 @@ def build_dataset_from_youtube(
     version: str = __version__,
     now: Callable[[], str] = _utc_now_iso,
 ) -> BuildReport:
-    """Download a YouTube video's audio, transcribe it, and build a dataset.
+    """Download one media URL's audio, transcribe it, and build a dataset.
+
+    Any site yt-dlp supports works — YouTube, Dailymotion, SoundCloud, Twitch and
+    ~1800 others — because both the metadata and the audio come from yt-dlp, which
+    takes the URL verbatim. Nothing on this path is YouTube-specific.
 
     The downloaded audio is always deleted; the dataset is built before the temp
     directory is removed (clips are sliced from that audio).
@@ -427,6 +525,7 @@ def build_dataset_from_youtube(
             config=config,
             language=result.language,
             source_platform="youtube",
+            transcription_method=result.method,
             version=version,
             now=now,
         )
@@ -548,19 +647,27 @@ def _write_merged(
     return files
 
 
-def _reconcile_wavs(out_dir: Path, clips: list[DatasetClip]) -> None:
-    """Delete any WAV in the shared tree not referenced by the final manifest.
+def _reconcile_wavs(out_dir: Path, clips: list[DatasetClip], owned_ids: set[str]) -> None:
+    """Delete WAVs *this dataset wrote* that the final manifest no longer references.
 
     Keeps the dataset's strong invariant — every WAV is referenced and every clip
     has a WAV — by removing orphans left when a source fails after slicing, or stale
     higher-numbered clips from a previous run that produced more clips.
+
+    Deletion is restricted to the ``<source_id>_NNNN.wav`` names hearsay generates for
+    ``owned_ids``. ``--out`` is an ordinary directory a user may well point at a folder
+    that already holds their own recordings, and an unrestricted sweep silently erased
+    every one of them — so anything hearsay did not create is left untouched.
     """
     referenced = {c.audio_path for c in clips}
     wavs_dir = out_dir / "wavs"
     if not wavs_dir.is_dir():
         return
     for wav in wavs_dir.glob("*.wav"):
-        if f"wavs/{wav.name}" not in referenced:
+        if f"wavs/{wav.name}" in referenced:
+            continue
+        match = _CLIP_NAME.match(wav.name)
+        if match and match.group(1) in owned_ids:
             wav.unlink(missing_ok=True)
 
 
@@ -642,7 +749,8 @@ def build_combined_dataset(
         _write_merged(out_dir, all_clips, all_drops, config.formats)  # crash-safe incremental write
 
     # Remove orphan/stale WAVs so the on-disk tree matches the merged manifest exactly.
-    _reconcile_wavs(out_dir, all_clips)
+    # Only ids this build (or a previous run recorded in state) produced are candidates.
+    _reconcile_wavs(out_dir, all_clips, {s.source_id for s in sources} | set(state))
     files = _write_merged(out_dir, all_clips, all_drops, config.formats)
     if config.diarize.enabled and config.diarize.mode == "per_speaker":
         files.extend(write_per_speaker_indices(out_dir, all_clips, config.formats))
@@ -701,7 +809,7 @@ def _youtube_source(
                 words,
                 out_dir=out_dir,
                 source_id=source_id,
-                config=config,
+                config=_with_detected_language(config, result.language),
                 diarizer=diarizer,
             )
         return clips, drops, meta
@@ -743,7 +851,7 @@ def _episode_source(
                 words,
                 out_dir=out_dir,
                 source_id=source_id,
-                config=config,
+                config=_with_detected_language(config, result.language),
                 diarizer=diarizer,
             )
         meta = SourceMetadata(
@@ -780,6 +888,7 @@ def build_dataset_from_playlist(
     if limit is not None:
         entries = entries[:limit]
     diarizer, warnings = _resolve_diarizer(config, None)
+    warnings += _format_warnings(config.formats) + _alignment_warnings(model_size)
     sources = [
         _youtube_source(
             entry,
@@ -830,6 +939,7 @@ def build_dataset_from_feed(
     if limit is not None:
         episodes = episodes[:limit]
     diarizer, warnings = _resolve_diarizer(config, None)
+    warnings += _format_warnings(config.formats) + _alignment_warnings(model_size)
     sources = [
         _episode_source(
             episode,

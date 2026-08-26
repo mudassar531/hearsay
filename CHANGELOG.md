@@ -4,6 +4,115 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-08-26
+
+### Security
+
+- **The web UI refuses to fetch private addresses.** It hands caller-supplied URLs to
+  yt-dlp, which fetches them server-side; now that any URL is accepted, loopback,
+  link-local, and RFC1918 targets are rejected so the page cannot be used to reach
+  hosts inside the user's own network.
+
+- **Fixed an SSRF in YouTube URL validation.** `extract_video_id` matched its
+  patterns anywhere in the string, so any URL merely *containing*
+  `youtu.be/<11 chars>` — e.g.
+  `http://169.254.169.254/latest/meta-data/#youtu.be/dQw4w9WgXcQ` — passed
+  validation and was handed to yt-dlp to fetch. The id is now located by parsing
+  the URL and matching the real hostname. This is the gate the web UI relies on to
+  decide whether a caller-supplied URL is fetched server-side.
+- **The web UI now validates the `Host` header.** Without it, a public web page
+  could re-point its own hostname at `127.0.0.1` (DNS rebinding) and talk to the
+  local server as same-origin, reading every transcript it returned. Loopback names
+  and the bound address are accepted; anything else gets a 403.
+
+### Added
+
+- **Any language, not just the ones Parakeet knows.** `auto` picks Parakeet on Apple
+  Silicon, but Parakeet covers exactly 25 European languages and does not refuse the
+  rest — it transliterates them into confident nonsense. An Urdu naat came back as
+  fluent-looking Latin gibberish with no error anywhere. hearsay now identifies the
+  language first (one window, smallest Whisper checkpoint) and routes anything Parakeet
+  cannot read to Whisper. The probe only chooses the engine; Whisper re-detects during
+  the real decode, because forcing a tiny model's guess turned a Cyrillic Uzbek bulletin
+  into Arabic-script nonsense.
+- **A language picker in the web UI.** It was a free-text box, so `urdu` (instead of
+  `ur`) silently produced a wall of 100 codes under the hint "check the file is a valid
+  audio/video file". Language is now a list, and the CLI answers a name with the code it
+  meant: *Unknown language code: 'urdu'. Did you mean 'ur'?*
+- **Output is a visible mode, not a checkbox.** The training dataset — the thing most
+  people come here for — was an unticked checkbox next to VAD, easy to miss entirely.
+  It is now a Markdown / Training dataset toggle that says what the .zip contains.
+
+### Added
+
+- **Any site yt-dlp supports, not just YouTube.** Metadata and audio always came from
+  yt-dlp, which takes the URL verbatim — only the CLI/web routers were YouTube-shaped.
+  An http(s) source is now tried as a podcast feed and, when it isn't one, handed to
+  yt-dlp, so Dailymotion, SoundCloud, Twitch and ~1800 other sites build datasets and
+  markdown. `build_dataset_from_youtube` is renamed `build_dataset_from_media_url`.
+- **Playlists and feeds build datasets in the web UI**, merged into one training set
+  (capped at the first 5 items, since the whole build streams back in one response).
+- **An elapsed clock while a build runs.** The browser got no output until a build
+  finished, so a slow source was indistinguishable from a hung server.
+- **A favicon**, ending the 404 every page load logged.
+
+### Fixed
+
+- **Diarization works on MP3s again** (`--diarize`, `--per-speaker`,
+  `--dominant-speaker`). pyannote reads fixed windows sized from the reported
+  duration, and a compressed container decodes to a frame-quantized sample count
+  that can fall short of the last window — so it raised `resulted in N samples
+  instead of the expected M` on every podcast enclosure, the exact input the
+  single-voice-TTS workflow is for. Audio is now decoded to a PCM WAV first.
+- **`--out` no longer deletes the user's own audio.** Reconciliation swept every
+  unreferenced `.wav` under `<out>/wavs/`, so pointing `--out` at a folder that
+  already held recordings destroyed them. Only hearsay's own
+  `<source_id>_NNNN.wav` clips are eligible for cleanup.
+- **Non-English sources build normally.** The script/speaking-rate filters were
+  pinned to English whenever `--lang` was omitted, so an Urdu, Arabic, Russian,
+  Hindi or Chinese recording had every clip dropped as `non_target_script` — an
+  empty dataset under a green success tick. `target_language` now defaults to the
+  language transcription detected.
+- **Widening the clip window works.** `--segment-min`/`--segment-max` reached the
+  segmenter but not the duration filter, which kept its 1–15s defaults; e.g.
+  `--segment-max 30` produced "0 clips" while reporting success. The filter now
+  follows the segment window unless bounds are set explicitly.
+- **`--segment-min` above `--segment-max` is rejected** instead of silently
+  building a near-empty dataset and exiting 0.
+- **MCP tools no longer block the event loop.** FastMCP invokes a sync tool
+  directly in its async handler, so a multi-minute transcription stalled the whole
+  stdio session — no other call, no keepalive, no cancellation. Both tools now run
+  their work in a worker thread.
+- **The MCP server reports hearsay's version** in `serverInfo` rather than the MCP
+  SDK's.
+- **YouTube audio downloads work again.** The locked `yt-dlp` (2026.6.9) could no
+  longer fetch audio at all — YouTube now requires a GVS PO token, and every player
+  client either 403'd or had its formats stripped. Dataset mode was therefore broken
+  for every YouTube source. The floor is now 2026.8.19; this dependency needs to keep
+  moving, because YouTube breaks it on its own schedule.
+- **Out-of-range dataset options print a hearsay error** naming the flag, instead
+  of a raw pydantic `ValidationError` traceback with a pydantic.dev URL.
+
+### Added
+
+- **A warning when the chosen model cannot align reliably.** `whisper-tiny` and
+  `whisper-base` can omit an audible word during the `word_timestamps` pass,
+  shipping a clip paired with a transcript missing it — silent audio/text
+  misalignment that no downstream filter can detect.
+- **A warning when `--format hf` is combined with `ljspeech`.** HuggingFace
+  `audiofolder` refuses a tree holding both a `metadata.csv` and a
+  `metadata.jsonl` (`Found metadata files with different extensions`), so the
+  HuggingFace index was unloadable whenever it was requested alongside the default
+  LJSpeech index.
+
+### Changed
+
+- `FilterConfig.target_language` now defaults to `None` ("follow the source's
+  detected language") rather than `"en"`. Callers that want the previous behaviour
+  should pass `target_language="en"` explicitly.
+- The diarization tests no longer depend on `pyannote.audio` being absent from the
+  environment, so `uv sync --all-extras` keeps the suite green.
+
 ## 0.3.0 — 2026-06-15
 
 ### What's new: dataset export mode

@@ -1,7 +1,13 @@
 """Tests for podcast feed parsing (offline, against a recorded RSS fixture)."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
+import pytest
+
+from hearsay import feeds
+from hearsay.errors import FeedError
 from hearsay.feeds import _duration_seconds, _suffix_for, parse_feed
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -52,3 +58,40 @@ def test_suffix_for_uses_content_type_then_url() -> None:
     assert _suffix_for("http://x/ep", "audio/mpeg") == ".mp3"
     assert _suffix_for("http://x/ep.m4a", None) == ".m4a"
     assert _suffix_for("http://x/ep?token=1", "application/octet-stream") == ".mp3"
+
+
+def test_fetch_feed_applies_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """feedparser opens URLs with no timeout, which hangs hearsay forever on a
+    server that accepts the connection and then stalls. hearsay fetches the bytes
+    itself so it can bound the wait."""
+    seen: dict = {}
+
+    class _Response:
+        def read(self, *_a: object) -> bytes:
+            return b"<rss><channel><title>T</title></channel></rss>"
+
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+    def fake_urlopen(request: object, timeout: float | None = None) -> _Response:
+        seen["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(feeds.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(FeedError):  # no entries in the stub feed
+        feeds.fetch_feed("https://example.com/feed.xml")
+    assert seen["timeout"] is not None and seen["timeout"] > 0
+
+
+def test_fetch_feed_timeout_becomes_a_friendly_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(request: object, timeout: float | None = None) -> object:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(feeds.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(FeedError) as excinfo:
+        feeds.fetch_feed("https://example.com/feed.xml")
+    assert "Could not fetch feed" in excinfo.value.message
+    assert excinfo.value.hint

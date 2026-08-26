@@ -1,6 +1,6 @@
 [project]
 name = "hearsay"
-version = "0.3.0"
+version = "0.4.0"
 description = "crawl4ai for video & audio — turn any YouTube video, podcast, or recording into clean timestamped LLM-ready markdown, or TTS/STT training datasets"
 readme = "README.md"
 authors = [
@@ -47,9 +47,17 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "feedparser>=6.0.12",
     "pydantic>=2.13.4",
+    # Imported directly by captions.py to give the transcript API a timeout-bearing
+    # session; youtube-transcript-api pulls it in too, but relying on that is a
+    # latent break, so it is declared here.
+    "requests>=2.32",
     "typer>=0.26.7",
     "youtube-transcript-api>=1.2.4",
-    "yt-dlp>=2026.6.9",
+    # YouTube breaks yt-dlp constantly and the fix always ships in a new release: the
+    # 2026.6.9 floor could no longer download audio at all (HTTP 403 — YouTube now wants
+    # a GVS PO token), which silently killed dataset mode for every YouTube source.
+    # Keep this floor moving.
+    "yt-dlp>=2026.8.19",
 ]
 
 [project.urls]

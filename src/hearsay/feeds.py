@@ -12,6 +12,10 @@ from hearsay.errors import AudioDownloadError, FeedError
 
 _USER_AGENT = "hearsay/0.1 (+https://github.com/mudassar531/hearsay)"
 _DOWNLOAD_TIMEOUT_S = 600
+_FEED_TIMEOUT_S = 30
+# A feed document is text; this ceiling stops a hostile or broken URL streaming
+# unbounded bytes into memory while we wait for an end that never comes.
+_MAX_FEED_BYTES = 32 * 1024 * 1024
 # Content-type -> file extension for naming the downloaded episode.
 _AUDIO_EXTENSIONS = {
     "audio/mpeg": ".mp3",
@@ -53,11 +57,23 @@ def fetch_feed(url: str) -> Feed:
 
     Raises FeedError when the URL cannot be fetched or has no episodes.
     """
+    # Fetch the bytes ourselves rather than letting feedparser open the URL: it
+    # applies no timeout, so a server that accepts the connection and then stalls
+    # hangs hearsay forever with no output and nothing to Ctrl-C cleanly.
     try:
-        parsed = feedparser.parse(url, agent=_USER_AGENT)
-    except Exception as exc:  # feedparser usually self-handles, but never leak a traceback
+        request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(request, timeout=_FEED_TIMEOUT_S) as response:
+            content = response.read(_MAX_FEED_BYTES)
+    except (TimeoutError, OSError, ValueError) as exc:
         raise FeedError(
             f"Could not fetch feed {url}: {exc}",
+            hint="Check the URL is reachable and points to an RSS/Atom feed.",
+        ) from exc
+    try:
+        parsed = feedparser.parse(content)
+    except Exception as exc:  # feedparser usually self-handles, but never leak a traceback
+        raise FeedError(
+            f"Could not parse feed {url}: {exc}",
             hint="Check the URL is reachable and points to an RSS/Atom feed.",
         ) from exc
     if not parsed.entries:

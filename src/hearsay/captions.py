@@ -2,9 +2,11 @@
 
 import html
 import re
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
+import requests
 from youtube_transcript_api import (
+    CouldNotRetrieveTranscript,
     NoTranscriptFound,
     RequestBlocked,
     TranscriptsDisabled,
@@ -14,6 +16,21 @@ from youtube_transcript_api import (
 
 from hearsay.errors import CaptionsError, NoCaptionsError, VideoUnavailableError
 from hearsay.models import Segment
+
+# youtube-transcript-api builds a bare requests.Session, and requests applies no
+# default timeout — a server that accepts the connection then stalls leaves hearsay
+# hanging indefinitely on what is normally its fastest path. requests has no
+# session-level timeout setting, so the only place to inject one is `request`.
+_CAPTIONS_TIMEOUT_S = 30
+
+
+class _TimeoutSession(requests.Session):
+    """A requests Session that applies a default timeout to every call."""
+
+    def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", _CAPTIONS_TIMEOUT_S)
+        return super().request(*args, **kwargs)
+
 
 _WHITESPACE = re.compile(r"\s+")
 # A snippet that is ENTIRELY one bracketed/parenthesized cue, e.g. "[Music]".
@@ -111,7 +128,7 @@ def fetch_captions(video_id: str, language: str) -> CaptionResult:
     Raises NoCaptionsError when the video has no captions at all, and
     VideoUnavailableError / CaptionsError for access problems.
     """
-    api = YouTubeTranscriptApi()
+    api = YouTubeTranscriptApi(http_client=_TimeoutSession())
     try:
         transcript_list = api.list(video_id)
         available = [TranscriptInfo(t.language_code, t.is_generated) for t in transcript_list]
@@ -135,6 +152,19 @@ def fetch_captions(video_id: str, language: str) -> CaptionResult:
         raise CaptionsError(
             "YouTube is blocking transcript requests from this network.",
             hint="Wait a few minutes and retry, or switch networks (cloud IPs are often blocked).",
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        raise CaptionsError(
+            f"Could not reach YouTube for {video_id}: {exc}",
+            hint="Check your network connection, then try again.",
+        ) from exc
+    except CouldNotRetrieveTranscript as exc:
+        # The library's own base class: it grows new subclasses (age gates, consent
+        # walls, IP bans) release to release, and any one hearsay doesn't name would
+        # otherwise reach the user as a raw traceback on its most common path.
+        raise CaptionsError(
+            f"Could not retrieve captions for {video_id}: {exc}",
+            hint="Try --transcribe to transcribe the audio locally instead.",
         ) from exc
     return CaptionResult(
         segments=normalize_snippets(fetched.to_raw_data()),

@@ -75,7 +75,7 @@ def _zip_names(zip_b64: str) -> list[str]:
 
 def test_dataset_url_builds_and_returns_zip(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
-    monkeypatch.setattr(ds_build, "build_dataset_from_youtube", _fake_build(captured))
+    monkeypatch.setattr(ds_build, "build_dataset_from_media_url", _fake_build(captured))
     body = json.dumps(
         {
             "url": "https://www.youtube.com/watch?v=abcdefghijk",
@@ -94,11 +94,22 @@ def test_dataset_url_builds_and_returns_zip(server: str, monkeypatch: pytest.Mon
     assert captured["config"].segment_min_s == 2.0 and captured["config"].segment_max_s == 8.0
 
 
-def test_dataset_url_rejects_playlist(server: str) -> None:
+def test_dataset_url_builds_a_playlist(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Playlists used to be refused here and sent to the CLI; the browser now builds them
+    # into one merged dataset, capped so a huge feed can't be pulled through one response.
+    captured: dict = {}
+
+    def fake_playlist(url: str, **kwargs: object):
+        captured["url"] = url
+        captured["limit"] = kwargs.get("limit")
+        return _fake_build(captured)(url, **{k: v for k, v in kwargs.items() if k != "limit"})
+
+    monkeypatch.setattr(ds_build, "build_dataset_from_playlist", fake_playlist)
     body = json.dumps({"url": "https://www.youtube.com/playlist?list=PL1234567890"}).encode()
     status, data = _post(server, "/api/dataset", body)
-    assert status == 400 and data["ok"] is False
-    assert "playlist" in data["error"].lower()
+    assert status == 200 and data["dataset"] is True
+    assert captured["url"].endswith("list=PL1234567890")
+    assert captured["limit"] == 5  # default browser cap
 
 
 def test_dataset_url_rejects_empty(server: str) -> None:
@@ -120,18 +131,22 @@ def test_dataset_file_builds_and_returns_zip(server: str, monkeypatch: pytest.Mo
     assert captured["config"].sample_rate == 22050
 
 
-def test_dataset_page_has_dataset_toggle(server: str) -> None:
+def test_dataset_page_offers_dataset_mode(server: str) -> None:
     conn = http.client.HTTPConnection(server, timeout=5)
     conn.request("GET", "/")
     body = conn.getresponse().read().decode()
     conn.close()
-    assert 'id="dataset"' in body and "/api/dataset" in body  # the UI offers dataset mode
+    # Output is a visible mode choice, not a checkbox people miss.
+    assert 'id="modeDs"' in body and 'id="modeDoc"' in body
+    assert "/api/dataset" in body
+    # And the language is picked from a list, so an invalid code cannot be typed.
+    assert '<select id="lang">' in body and 'value="ur"' in body
 
 
 def test_dataset_malformed_numeric_param_is_400(
     server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ds_build, "build_dataset_from_youtube", _fake_build({}))
+    monkeypatch.setattr(ds_build, "build_dataset_from_media_url", _fake_build({}))
     body = json.dumps(
         {"url": "https://www.youtube.com/watch?v=abcdefghijk", "sample_rate": "notanumber"}
     ).encode()
@@ -143,7 +158,7 @@ def test_dataset_malformed_numeric_param_is_400(
 def test_dataset_no_temp_leak(server: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import tempfile
 
-    monkeypatch.setattr(ds_build, "build_dataset_from_youtube", _fake_build({}))
+    monkeypatch.setattr(ds_build, "build_dataset_from_media_url", _fake_build({}))
     before = set(Path(tempfile.gettempdir()).glob("hearsay-web-ds-*"))
     _post(
         server,

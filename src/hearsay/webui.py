@@ -4,8 +4,8 @@ One static HTML page (embedded below) talks to two JSON endpoints that wrap the
 existing pipeline. The design is Swiss/International style: white, Helvetica, a
 strict grid, hairline rules, generous whitespace, monochrome with one restrained
 accent. A sidebar holds history, the top bar holds the model selector, and a
-composer takes a YouTube URL or an uploaded audio/video file, returning clean
-timestamped markdown with a live preview.
+composer takes any media URL yt-dlp supports (or an uploaded audio/video file) and
+returns clean timestamped markdown with a live preview, or a TTS/STT training dataset.
 
 Built on the standard-library HTTP server so it adds no runtime dependencies.
 File uploads are sent as the raw request body (filename in a query param),
@@ -15,14 +15,19 @@ History lives entirely in the browser (localStorage); the server is stateless.
 
 import base64
 import io
+import ipaddress
 import json
+import socket
 import tempfile
+import traceback
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from hearsay.errors import HearsayError, InvalidSourceError
+from hearsay.errors import FeedError, HearsayError, InvalidSourceError
 from hearsay.models import Document
 from hearsay.pipeline import (
     NoCaptionsError,
@@ -38,6 +43,40 @@ from hearsay.youtube import extract_playlist_id, extract_video_id
 # Upload ceiling so a stray huge request can't exhaust memory (raw body is read
 # fully into RAM). 1 GiB comfortably covers multi-hour audio.
 _MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+_CHUNK_BYTES = 1024 * 1024
+
+# Host header values that mean "this machine". Any other value means the request
+# reached us through a name we don't serve — the signature of DNS rebinding, where
+# a page on the public internet re-points its own hostname at 127.0.0.1 and then
+# talks to this server as same-origin, able to *read* every response. Binding to
+# localhost is no defence against that; checking the Host header is.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
+
+
+def _host_allowed(host_header: str, bound_host: str) -> bool:
+    """True when ``Host`` names this server (loopback, or the address it was bound to).
+
+    ``--host 0.0.0.0`` is an explicit "serve my LAN", so the bound address itself and
+    any bare IP literal are accepted there; the check still rejects the *named* hosts
+    a rebinding attack must use, which is what makes it worth doing.
+    """
+    name = (host_header or "").rsplit(":", 1)[0].strip().lower()
+    name = name.strip("[]") or ""
+    if not name:
+        return False
+    if name in _LOCAL_HOSTS or f"[{name}]" in _LOCAL_HOSTS:
+        return True
+    if name == bound_host.strip("[]").lower():
+        return True
+    # An IP literal cannot be rebound (there is no name to re-resolve), so when the
+    # user deliberately exposed the server, reaching it by raw address is legitimate.
+    if bound_host == "0.0.0.0":
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False
+        return True
+    return False
 
 
 # --- Pipeline glue (network/transcription happens downstream) --------------
@@ -51,25 +90,21 @@ def process_url(
     language: str | None = None,
     vad: bool = True,
 ) -> Document:
-    """Ingest a single YouTube video URL (captions, or whisper/parakeet).
+    """Ingest a single media URL (captions, or whisper/parakeet).
 
-    Mirrors the CLI's single-video behaviour: captions first, falling back to
-    local transcription when there are none (or when ``transcribe`` forces it).
+    Mirrors the CLI's single-video behaviour: captions first, falling back to local
+    transcription when there are none (or when ``transcribe`` forces it). Non-YouTube
+    sites have no caption API, so they transcribe directly.
     """
-    url = url.strip()
-    if not url:
-        raise InvalidSourceError("No URL provided.", hint="Paste a YouTube video link.")
+    url = require_fetchable_url(url)
     if extract_playlist_id(url) is not None:
         raise InvalidSourceError(
-            "Playlists and podcast feeds aren't supported in the web UI yet.",
-            hint="Use the CLI for batch sources, e.g. hearsay <url> --all.",
+            "A playlist produces many transcripts; this view shows one.",
+            hint="Tick Dataset to build a playlist into one training set, or use the "
+            "CLI for batch markdown: hearsay <url> --all.",
         )
-    if extract_video_id(url) is None:
-        raise InvalidSourceError(
-            f"Not a recognized YouTube video URL: {url}",
-            hint="Paste a single YouTube video link, or upload a file instead.",
-        )
-    if transcribe:
+    # Captions are a YouTube API; every other site goes straight to transcription.
+    if transcribe or extract_video_id(url) is None:
         return ingest_youtube_transcribe(url, model_size=model, language=language, vad_filter=vad)
     try:
         return ingest_youtube(url, language=language or "en")
@@ -86,11 +121,29 @@ def process_file(
     vad: bool = True,
 ) -> Document:
     """Transcribe uploaded file bytes, preserving the original name for the title."""
+    with _upload_workspace(name) as (source, _out):
+        source.write_bytes(data)
+        return ingest_file(source, model_size=model, language=language, vad_filter=vad)
+
+
+@contextmanager
+def _upload_workspace(name: str) -> Iterator[tuple[Path, Path]]:
+    """A temp dir holding one uploaded file, yielding ``(source, out_dir)``.
+
+    Errors raised inside are re-raised with the scratch path rewritten to the name the
+    user actually uploaded: third-party messages embed the full path, which means the
+    response would otherwise carry this machine's temp directory (and often its
+    username) for what the user knows simply as "talk.mp3".
+    """
     safe_name = Path(name).name or "upload"
     with tempfile.TemporaryDirectory(prefix="hearsay-web-") as tmp:
-        path = Path(tmp) / safe_name
-        path.write_bytes(data)
-        return ingest_file(path, model_size=model, language=language, vad_filter=vad)
+        source = Path(tmp) / safe_name
+        try:
+            yield source, Path(tmp) / "hearsay-dataset"
+        except HearsayError as exc:
+            exc.message = exc.message.replace(str(source), safe_name).replace(tmp, "")
+            exc.args = (exc.message,)
+            raise
 
 
 def _document_payload(doc: Document) -> dict:
@@ -154,44 +207,102 @@ def _dataset_config(out_dir: Path, opts: dict):
         ) from exc
 
 
-def build_url_dataset(url: str, *, opts: dict) -> dict:
-    """Build a dataset from one YouTube video URL and return a zip payload."""
-    from hearsay.dataset.build import build_dataset_from_youtube
+def require_fetchable_url(url: str) -> str:
+    """Return ``url`` if the server may fetch it, else raise InvalidSourceError.
 
+    The UI hands caller-supplied URLs to yt-dlp, which fetches them server-side, so
+    this is a trust boundary: without it a page (or a LAN client under
+    ``--host 0.0.0.0``) could aim hearsay at cloud metadata, an internal admin panel,
+    or a loopback port and use it as a proxy. Only http(s) to a public address is
+    allowed.
+    """
+    # ponytail: resolves once and checks the answer, so a name that re-resolves to a
+    # private address between here and the fetch still gets through. Pin the resolved
+    # IP into the download if that ever matters.
     url = url.strip()
     if not url:
-        raise InvalidSourceError("No URL provided.", hint="Paste a YouTube video link.")
-    if extract_playlist_id(url) is not None:
+        raise InvalidSourceError("No URL provided.", hint="Paste a video or podcast link.")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise InvalidSourceError(
-            "Playlists aren't supported in the web UI's dataset mode.",
-            hint="Use the CLI for batch sources, e.g. hearsay dataset <playlist-url>.",
+            f"Not a fetchable web address: {url}",
+            hint="Use an http:// or https:// link, or upload a file instead.",
         )
-    if extract_video_id(url) is None:
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except OSError as exc:
         raise InvalidSourceError(
-            f"Not a recognized YouTube video URL: {url}",
-            hint="Paste a single YouTube video link, or upload a file instead.",
-        )
+            f"Could not resolve {parsed.hostname}: {exc}",
+            hint="Check the address is spelled correctly and reachable.",
+        ) from exc
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if not address.is_global or address.is_loopback:
+            raise InvalidSourceError(
+                f"Refusing to fetch a private address ({address}).",
+                hint="hearsay only fetches public URLs, so it cannot be used to reach "
+                "hosts inside your network.",
+            )
+    return url
+
+
+def build_url_dataset(url: str, *, opts: dict) -> dict:
+    """Build a dataset from any media URL — video, playlist, or podcast feed.
+
+    Playlists and feeds merge into one dataset, exactly as the CLI does. Single media
+    URLs go through yt-dlp, so every site it supports works, not only YouTube.
+    """
+    from hearsay.dataset.build import (
+        build_dataset_from_feed,
+        build_dataset_from_media_url,
+        build_dataset_from_playlist,
+    )
+
+    url = require_fetchable_url(url)
+    limit = _batch_limit(opts)
     with tempfile.TemporaryDirectory(prefix="hearsay-web-ds-") as tmp:
         out_dir = Path(tmp) / "hearsay-dataset"
-        report = build_dataset_from_youtube(
-            url,
-            config=_dataset_config(out_dir, opts),
-            model_size=str(opts.get("model") or DEFAULT_MODEL),
-            language=(opts.get("lang") or None),
-            vad_filter=bool(opts.get("vad", True)),
-        )
+        config = _dataset_config(out_dir, opts)
+        common = {
+            "config": config,
+            "model_size": str(opts.get("model") or DEFAULT_MODEL),
+            "language": (opts.get("lang") or None),
+            "vad_filter": bool(opts.get("vad", True)),
+        }
+        if extract_playlist_id(url) is not None:
+            report: object = build_dataset_from_playlist(url, limit=limit, **common)
+        elif extract_video_id(url) is not None:
+            report = build_dataset_from_media_url(url, **common)  # known video, no probe
+        else:
+            # Anything else is a podcast feed or another site's media page, and only
+            # fetching tells them apart — same fallback the CLI uses.
+            try:
+                report = build_dataset_from_feed(url, limit=limit, **common)
+            except FeedError:
+                report = build_dataset_from_media_url(url, **common)
         return _dataset_payload(out_dir, report)
+
+
+# A browser build streams its result back in one response, so batch sources are capped
+# by default; the CLI is the right tool for a hundred-episode feed.
+_DEFAULT_WEB_BATCH_LIMIT = 5
+
+
+def _batch_limit(opts: dict) -> int:
+    """How many playlist/feed items a browser build may take."""
+    try:
+        requested = int(opts.get("limit") or _DEFAULT_WEB_BATCH_LIMIT)
+    except (TypeError, ValueError):
+        return _DEFAULT_WEB_BATCH_LIMIT
+    return max(1, min(requested, 25))
 
 
 def build_file_dataset(name: str, data: bytes, *, opts: dict) -> dict:
     """Build a dataset from an uploaded file and return a zip payload."""
     from hearsay.dataset.build import build_dataset_from_file
 
-    safe_name = Path(name).name or "upload"
-    with tempfile.TemporaryDirectory(prefix="hearsay-web-ds-") as tmp:
-        source = Path(tmp) / safe_name
+    with _upload_workspace(name) as (source, out_dir):
         source.write_bytes(data)
-        out_dir = Path(tmp) / "hearsay-dataset"
         report = build_dataset_from_file(
             source,
             config=_dataset_config(out_dir, opts),
@@ -207,11 +318,33 @@ def build_file_dataset(name: str, data: bytes, *, opts: dict) -> dict:
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "hearsay-webui"
+    bound_host = "127.0.0.1"  # set by make_server; used to validate the Host header
+    # BaseHTTPRequestHandler applies this to the connection socket. Without it a client
+    # that opens a connection and then stalls pins a handler thread for ever, and enough
+    # of them exhaust the pool while the UI still looks alive.
+    timeout = 60
 
     def log_message(self, *args: object) -> None:
         pass  # quiet by default — no request logging to stderr
 
+    def _reject_foreign_host(self) -> bool:
+        """Send 403 and return True when the Host header isn't one we serve."""
+        if _host_allowed(self.headers.get("Host", ""), self.bound_host):
+            return False
+        self._send_json(
+            {
+                "ok": False,
+                "error": "Refusing a request for a host this server does not serve.",
+                "hint": "Open the UI at http://localhost:<port> — hearsay rejects other "
+                "hostnames so a website cannot reach your local server.",
+            },
+            status=403,
+        )
+        return True
+
     def do_GET(self) -> None:
+        if self._reject_foreign_host():
+            return
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             self._send_html(_PAGE)
@@ -221,6 +354,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Not found."}, status=404)
 
     def do_POST(self) -> None:
+        if self._reject_foreign_host():
+            return
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/url":
@@ -236,8 +371,18 @@ class _Handler(BaseHTTPRequestHandler):
                 return
         except HearsayError as exc:
             self._send_json({"ok": False, "error": exc.message, "hint": exc.hint}, status=400)
-        except Exception as exc:  # surface anything unexpected as a 500
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        except Exception:  # surface anything unexpected as a 500
+            # The detail belongs in the operator's terminal, not the response: it
+            # routinely carries absolute temp paths and whole ffmpeg/yt-dlp banners.
+            traceback.print_exc()
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "Something went wrong while processing that source.",
+                    "hint": "The full error was printed in the terminal running `hearsay web`.",
+                },
+                status=500,
+            )
         else:
             self._send_json(payload)
 
@@ -250,7 +395,25 @@ class _Handler(BaseHTTPRequestHandler):
                 "Upload is too large.",
                 hint="The web UI accepts files up to 1 GiB; use the CLI for bigger ones.",
             )
-        return self.rfile.read(length) if length else b""
+        # Read in chunks and count as we go: a single rfile.read(length) trusts a header
+        # the client controls, so a lying Content-Length could walk straight past the
+        # ceiling above. Counting the bytes that actually arrive cannot be lied to.
+        chunks: list[bytes] = []
+        remaining = length
+        total = 0
+        while remaining > 0:
+            chunk = self.rfile.read(min(_CHUNK_BYTES, remaining))
+            if not chunk:
+                break  # client hung up early; hand on what arrived and let it fail there
+            total += len(chunk)
+            if total > _MAX_UPLOAD_BYTES:
+                raise InvalidSourceError(
+                    "Upload is too large.",
+                    hint="The web UI accepts files up to 1 GiB; use the CLI for bigger ones.",
+                )
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def _handle_url(self) -> Document:
         body = json.loads(self._read_body() or b"{}")
@@ -312,7 +475,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 def make_server(host: str, port: int) -> ThreadingHTTPServer:
     """Create (but do not start) the threaded hearsay web server."""
-    return ThreadingHTTPServer((host, port), _Handler)
+    handler = type("_BoundHandler", (_Handler,), {"bound_host": host})
+    return ThreadingHTTPServer((host, port), handler)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8756) -> None:
@@ -334,6 +498,7 @@ _PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>hearsay</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23e3000f'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#ffffff; --panel:#ffffff; --fg:#111111; --fg2:#3a3a3a; --muted:#9a9a9a;
@@ -478,7 +643,15 @@ _PAGE = r"""<!doctype html>
   .send:not(:disabled):hover{background:var(--accent)}
   .copts{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid var(--line);
     color:var(--muted);font-size:11.5px;letter-spacing:.02em}
+  .mode{display:flex;border:1px solid var(--line2);}
+  .mode-btn{background:var(--bg);color:var(--muted);border:0;padding:5px 11px;cursor:pointer;
+    font:inherit;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+  .mode-btn + .mode-btn{border-left:1px solid var(--line2)}
+  .mode-btn.on{background:var(--line2);color:var(--bg)}
+  .mode-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .copts label{display:flex;align-items:center;gap:7px;cursor:pointer;text-transform:uppercase;letter-spacing:.06em;font-size:10.5px}
+  .copts select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:3px 6px;
+    font:inherit;font-size:10.5px;text-transform:none;letter-spacing:0;max-width:130px}
   .copts input[type=text]{width:96px;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:4px 8px;
     font:inherit;font-size:12px;outline:none;border-radius:0;text-transform:none;letter-spacing:0}
   .copts input[type=text]:focus{border-color:var(--fg2)}
@@ -541,21 +714,63 @@ _PAGE = r"""<!doctype html>
           <button class="attach" id="attach" title="Attach audio/video file">
             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 8.4l-5.3 5.3a3 3 0 0 1-4.3-4.3l6.1-6.1a2 2 0 0 1 2.9 2.9l-5.7 5.7a1 1 0 0 1-1.5-1.5l5.1-5.1"/></svg>
           </button>
-          <textarea id="input" rows="1" placeholder="Paste a YouTube URL, or attach a file…"></textarea>
+          <textarea id="input" rows="1" placeholder="Paste a video, playlist, or podcast link — or attach a file…"></textarea>
           <button class="send" id="send" title="Ingest">
             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 14.5V4M4.5 8.5 9 3.8l4.5 4.7"/></svg>
           </button>
         </div>
         <div class="copts">
+          <div class="mode" role="radiogroup" aria-label="Output">
+            <button type="button" class="mode-btn on" id="modeDoc" role="radio" aria-checked="true"
+              title="Clean timestamped markdown to read, or feed to a RAG pipeline">📄 Markdown</button>
+            <button type="button" class="mode-btn" id="modeDs" role="radio" aria-checked="false"
+              title="Audio clips + matching transcripts, as a .zip you can train on">🎙️ Training dataset</button>
+          </div>
           <label id="wrapTr"><input type="checkbox" id="transcribe"> Force transcription</label>
           <label><input type="checkbox" id="vad" checked> VAD</label>
-          <label style="text-transform:none;letter-spacing:0">Lang <input type="text" id="lang" placeholder="auto"></label>
-          <label title="Build a TTS/STT training dataset (downloads a .zip)"><input type="checkbox" id="dataset"> Dataset</label>
+          <label title="Leave on Detect unless the audio is mixed or the guess is wrong">Lang
+            <select id="lang">
+              <option value="">Detect</option>
+              <option value="en">English</option>
+              <option value="ur">Urdu</option>
+              <option value="hi">Hindi</option>
+              <option value="ar">Arabic</option>
+              <option value="fa">Persian</option>
+              <option value="ps">Pashto</option>
+              <option value="pa">Punjabi</option>
+              <option value="sd">Sindhi</option>
+              <option value="bn">Bengali</option>
+              <option value="uz">Uzbek</option>
+              <option value="tr">Turkish</option>
+              <option value="id">Indonesian</option>
+              <option value="ms">Malay</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+              <option value="ru">Russian</option>
+              <option value="uk">Ukrainian</option>
+              <option value="es">Spanish</option>
+              <option value="pt">Portuguese</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="it">Italian</option>
+              <option value="nl">Dutch</option>
+              <option value="pl">Polish</option>
+              <option value="sv">Swedish</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+              <option value="th">Thai</option>
+              <option value="vi">Vietnamese</option>
+              <option value="he">Hebrew</option>
+              <option value="el">Greek</option>
+              <option value="sw">Swahili</option>
+            </select>
+          </label>
         </div>
         <div class="copts" id="dsOpts" style="display:none">
           <label style="text-transform:none;letter-spacing:0">Seg s <input type="text" id="segMin" value="1" style="width:42px"> – <input type="text" id="segMax" value="15" style="width:42px"></label>
           <label style="text-transform:none;letter-spacing:0">Rate <input type="text" id="sr" value="22050" style="width:64px"></label>
-          <span style="color:var(--muted);font-size:10px">Playlists/feeds &amp; long sources → use the CLI</span>
+          <span style="color:var(--muted);font-size:10px">Downloads a .zip: wavs/ + metadata.csv + manifest.jsonl · playlists &amp; feeds build too (first 5)</span>
         </div>
       </div>
       <div class="hint">LOCAL TRANSCRIPTION DOWNLOADS THE MODEL ONCE, THEN RUNS OFFLINE</div>
@@ -624,11 +839,11 @@ function showHero(){
   current=null; $('#topTitle').textContent='New transcript'; renderHist();
   clearStream();
   const h=document.createElement('div'); h.className='hero';
-  h.innerHTML=`<div class="mark"></div><div class="eyebrow lbl">Video &amp; audio → markdown</div>
+  h.innerHTML=`<div class="mark"></div><div class="eyebrow lbl">Video &amp; audio → markdown or training data</div>
     <h1>hearsay</h1>
-    <p>Turn any YouTube video, podcast, or recording into clean, timestamped, LLM-ready markdown.</p>
+    <p>Paste a link and pick an output: clean timestamped <b>markdown</b>, or a <b>TTS/STT training dataset</b> &mdash; audio clips paired with their transcripts, as a .zip. YouTube, Dailymotion, SoundCloud and ~1800 other sites, playlists and podcast feeds, plus your own files.</p>
     <div class="chips">
-      <button class="chip" data-ex="https://www.youtube.com/watch?v=9GLYsrMpprs">Try a YouTube video</button>
+      <button class="chip" data-ex="https://www.youtube.com/watch?v=9GLYsrMpprs">Try a video</button>
       <button class="chip" data-attach>Upload an audio file</button>
     </div>`;
   stream.appendChild(h);
@@ -648,9 +863,20 @@ function userMsg(text){
 function botThinking(){
   const m=msgShell('hearsay',true);
   m.querySelector('.body').innerHTML=`<div class="think"><div class="spin"></div>
-    <span>Transcribing… this can take a while for long media.</span></div>`;
+    <span class="think-label">Working…</span></div>`;
+  // A build streams nothing back until it is finished, so without a clock a slow
+  // source is indistinguishable from a hung server. Counting up is the cheapest
+  // honest signal; a real progress bar needs the pipeline to stream.
+  const label=m.querySelector('.think-label'), t0=Date.now();
+  const tick=()=>{
+    const s=Math.round((Date.now()-t0)/1000);
+    const mm=Math.floor(s/60), ss=String(s%60).padStart(2,'0');
+    label.textContent=`Working… ${mm}:${ss} elapsed — downloading, then transcribing locally.`;
+  };
+  tick(); m.dataset.timer=setInterval(tick,1000);
   stream.appendChild(m); toBottom(); return m;
 }
+function stopThinking(node){ if(node&&node.dataset.timer) clearInterval(+node.dataset.timer); }
 function docNode(d){
   const wrap=document.createElement('div'); wrap.className='doc';
   wrap.innerHTML=`
@@ -714,7 +940,7 @@ async function submit(){
   const text=$('#input').value.trim();
   if(!pickedFile && !text) return;
   const model=$('#model').value, lang=$('#lang').value.trim(),
-        vad=$('#vad').checked, transcribe=$('#transcribe').checked, dataset=$('#dataset').checked;
+        vad=$('#vad').checked, transcribe=$('#transcribe').checked, dataset=datasetMode();
   const sourceLabel = pickedFile ? ('File · '+pickedFile.name) : text;
 
   if(stream.querySelector('.hero')) clearStream();
@@ -739,6 +965,7 @@ async function submit(){
       const d=await res.json();
       if(!d.ok) throw new Error((d.error||'Failed')+(d.hint?'\nTry: '+d.hint:''));
       downloadZip(d.zip_b64,d.zip_name);
+      stopThinking(thinking);
       thinking.querySelector('.body').innerHTML=''; thinking.querySelector('.body').appendChild(datasetNode(d));
       $('#topTitle').textContent='Dataset · '+d.clips+' clips';
       return;  // datasets aren't added to history (not re-openable as markdown)
@@ -752,11 +979,13 @@ async function submit(){
     }
     const d=await res.json();
     if(!d.ok) throw new Error((d.error||'Failed')+(d.hint?'\nTry: '+d.hint:''));
+    stopThinking(thinking);
     thinking.querySelector('.body').innerHTML=''; thinking.querySelector('.body').appendChild(docNode(d));
     $('#topTitle').textContent=d.title;
     const item={...d, id:Date.now(), source:sourceLabel};
     const h=load(); h.unshift(item); save(h); current=item.id; renderHist();
   }catch(e){
+    stopThinking(thinking);
     const b=thinking.querySelector('.body'); b.innerHTML='';
     const er=document.createElement('div'); er.className='err'; er.textContent=e.message; b.appendChild(er);
   }finally{
@@ -764,7 +993,19 @@ async function submit(){
   }
 }
 $('#send').onclick=submit;
-$('#dataset').onchange=e=>{ $('#dsOpts').style.display=e.target.checked?'flex':'none'; };
+/* Output is a mode, not an option: a dataset is what most people come here for, and it
+   was previously a small unticked checkbox that read as an afterthought. */
+function datasetMode(){ return $('#modeDs').classList.contains('on'); }
+function setMode(ds){
+  $('#modeDs').classList.toggle('on',ds);  $('#modeDoc').classList.toggle('on',!ds);
+  $('#modeDs').setAttribute('aria-checked',ds); $('#modeDoc').setAttribute('aria-checked',!ds);
+  $('#dsOpts').style.display=ds?'flex':'none';
+  $('#input').placeholder=ds
+    ? 'Paste a video, playlist, or podcast link — get audio clips + transcripts…'
+    : 'Paste a video, playlist, or podcast link — or attach a file…';
+}
+$('#modeDs').onclick=()=>setMode(true);
+$('#modeDoc').onclick=()=>setMode(false);
 
 /* ---- composer behaviour ---- */
 const input=$('#input'), comp=$('#composer');

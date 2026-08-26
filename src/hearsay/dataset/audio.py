@@ -24,6 +24,23 @@ _SLICE_TIMEOUT_S = 300
 _PROBE_TIMEOUT_S = 60
 
 
+# ffmpeg prints its version, build flags and every library line before the real error,
+# and faster-whisper surfaces that whole banner too. Showing the last line is usually
+# right, but these lines are never the error — drop them so the message a user reads is
+# the thing that actually went wrong.
+_FFMPEG_NOISE = re.compile(
+    r"^\s*(ffmpeg version|built with|configuration:|lib[a-z]+\s+\d|Input #|Output #|"
+    r"Stream #|Metadata:|Duration:|\s+encoder|\s+creation_time)",
+)
+
+
+def _error_tail(stderr: str) -> str:
+    """The last meaningful line of ffmpeg stderr, minus its banner."""
+    lines = [ln for ln in stderr.strip().splitlines() if ln.strip()]
+    useful = [ln.strip() for ln in lines if not _FFMPEG_NOISE.match(ln)]
+    return (useful or lines or ["no error output"])[-1][:300]
+
+
 def ensure_tools() -> None:
     """Verify ffmpeg and ffprobe are on PATH, with an actionable error if not."""
     for tool in ("ffmpeg", "ffprobe"):
@@ -137,7 +154,7 @@ def slice_clip(
             hint="Try a shorter source, or check ffmpeg is healthy.",
         ) from exc
     if proc.returncode != 0 or not dest.exists():
-        tail = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "no error output"
+        tail = _error_tail(proc.stderr)
         raise AudioExportError(
             f"ffmpeg could not slice clip {dest.name}: {tail}",
             hint="Check the source file is valid audio/video and ffmpeg supports it.",
@@ -259,3 +276,58 @@ def probe_sample_rate(path: Path) -> int:
         return max(0, int(proc.stdout.strip()))
     except ValueError:
         return 0
+
+
+# Diarization models (pyannote) run on 16 kHz mono. Decoding to that once, up front,
+# is both what they want and a way around lossy-container decode drift.
+DIARIZE_SAMPLE_RATE = 16000
+
+
+def decode_to_wav(source: Path, dest: Path, *, sample_rate: int = DIARIZE_SAMPLE_RATE) -> Path:
+    """Decode ``source`` in full to a mono 16-bit PCM WAV at ``sample_rate``.
+
+    Compressed containers (MP3/M4A) decode to a frame-quantized number of samples,
+    which can disagree with what a fixed-window consumer computes from the reported
+    duration — pyannote 4.x raises on exactly that mismatch ("resulted in N samples
+    instead of the expected M"). Handing it a PCM WAV makes the sample count exact,
+    so diarization works on podcast audio, not just on WAV input. Returns ``dest``.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    args = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(source),
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        str(dest),
+    ]
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_SLICE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioExportError(
+            f"ffmpeg timed out decoding {source.name} after {_SLICE_TIMEOUT_S}s.",
+            hint="Try a shorter source, or check ffmpeg is healthy.",
+        ) from exc
+    if proc.returncode != 0 or not dest.exists():
+        tail = _error_tail(proc.stderr)
+        raise AudioExportError(
+            f"ffmpeg could not decode {source.name}: {tail}",
+            hint="Check the source file is valid audio/video and ffmpeg supports it.",
+        )
+    return dest

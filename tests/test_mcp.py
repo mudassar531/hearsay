@@ -142,3 +142,53 @@ def test_mcp_stdio_roundtrip() -> None:
     assert markdown.startswith("---")
     assert "# sample" in markdown
     assert "fox" in markdown.lower()
+
+
+def test_server_reports_hearsay_version() -> None:
+    # FastMCP takes no version, so serverInfo defaulted to the MCP SDK's release —
+    # which tells a client nothing about which hearsay it is talking to.
+    from hearsay import __version__
+
+    assert build_server()._mcp_server.version == __version__
+
+
+def test_tools_do_not_block_the_event_loop() -> None:
+    """Transcription must run off the event loop.
+
+    FastMCP invokes a *sync* tool directly in the async handler, so a multi-minute
+    decode would stall the whole stdio session — no other call, no keepalive, no
+    cancellation — until it returned.
+    """
+    import time
+
+    server = build_server()
+    tool = server._tool_manager.get_tool("ingest_file")
+    assert tool.is_async, "tool must be a coroutine so it can offload its work"
+
+    async def exercise() -> int:
+        ticks = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        try:
+            await tool.run({"path": str(SAMPLE)})
+        finally:
+            beat.cancel()
+        return ticks
+
+    def slow(path: str) -> str:
+        time.sleep(0.5)
+        return "ok"
+
+    original = mcp_server.ingest_file_markdown
+    mcp_server.ingest_file_markdown = slow
+    try:
+        ticks = asyncio.run(exercise())
+    finally:
+        mcp_server.ingest_file_markdown = original
+    assert ticks > 5, f"event loop was blocked during the tool call (only {ticks} ticks)"

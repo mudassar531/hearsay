@@ -60,3 +60,7 @@ class AudioExportError(HearsayError):
 
 class DiarizationError(HearsayError):
     """Speaker diarization could not run (extra not installed, model gated/unauthorized)."""
+
+
+class InvalidOptionError(HearsayError):
+    """A CLI option (or combination of options) is out of range or contradictory."""

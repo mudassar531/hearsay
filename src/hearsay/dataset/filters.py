@@ -82,7 +82,10 @@ def _dominant_script(text: str) -> tuple[str, float] | None:
     return script, n / sum(counts.values())
 
 
-def _target_script(language: str) -> str | None:
+def _target_script(language: str | None) -> str | None:
+    """The script a language is written in, or None to disable the script filters."""
+    if not language:
+        return None
     return _LANG_SCRIPT.get(language.split("-", 1)[0].lower())
 
 

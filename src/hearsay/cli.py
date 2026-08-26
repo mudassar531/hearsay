@@ -14,8 +14,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -25,7 +27,7 @@ from typer.core import TyperGroup
 
 from hearsay import __version__
 from hearsay.batch import BatchItem, ensure_unique_slugs, run_batch, select, slugify
-from hearsay.errors import HearsayError, OutputWriteError
+from hearsay.errors import FeedError, HearsayError, InvalidOptionError, OutputWriteError
 from hearsay.feeds import Episode, fetch_feed
 from hearsay.models import Document, Transcript
 from hearsay.pipeline import (
@@ -75,6 +77,40 @@ class DatasetFormat(StrEnum):
     ljspeech = "ljspeech"
     jsonl = "jsonl"
     hf = "hf"
+
+
+# Pydantic field -> the CLI flag a user actually typed, so validation errors name the
+# flag rather than the internal model attribute.
+_FIELD_TO_FLAG = {
+    "sample_rate": "--sample-rate",
+    "segment_min_s": "--segment-min",
+    "segment_max_s": "--segment-max",
+    "edge_pad_s": "--pad",
+    "fade_s": "--fade",
+    "formats": "--format",
+    "out_dir": "--out",
+    "mode": "--diarize/--per-speaker/--dominant-speaker",
+}
+
+_DATASET_OPTION_HINT = "Run `hearsay dataset --help` to see each option's accepted range."
+
+
+def _format_option_errors(exc: ValidationError) -> str:
+    """Render a pydantic ValidationError as one line per bad flag."""
+    lines = []
+    for err in exc.errors():
+        loc = [str(part) for part in err.get("loc", ()) if not isinstance(part, int)]
+        field = loc[-1] if loc else ""
+        # Pydantic prefixes custom ValueErrors with "Value error, " — drop the noise.
+        message = err.get("msg", "is invalid").removeprefix("Value error, ")
+        # Whole-model checks (segment bounds) carry no field and already name their
+        # flags in the message; only per-field errors need a flag prefix.
+        if field:
+            label = _FIELD_TO_FLAG.get(field, f"--{field.replace('_', '-')}")
+            lines.append(f"{label}: {message}")
+        else:
+            lines.append(message)
+    return "Invalid option: " + "; ".join(lines) if lines else "Invalid option."
 
 
 _DEFAULT_MODEL = ModelSize(DEFAULT_MODEL)
@@ -250,31 +286,38 @@ def dataset(
     from hearsay.dataset.build import (
         build_dataset_from_feed,
         build_dataset_from_file,
+        build_dataset_from_media_url,
         build_dataset_from_playlist,
-        build_dataset_from_youtube,
     )
     from hearsay.dataset.models import DatasetConfig, DiarizeConfig, FilterConfig
 
     language = language or None  # treat --lang "" like an omitted flag (auto-detect)
     mode = "per_speaker" if per_speaker else "dominant" if dominant_speaker else "tag"
     config_kwargs: dict = {} if not fmt else {"formats": [f.value for f in fmt]}
-    config = DatasetConfig(
-        out_dir=out,
-        sample_rate=sample_rate,
-        segment_min_s=segment_min,
-        segment_max_s=segment_max,
-        normalize=normalize,
-        edge_pad_s=pad,
-        filters=FilterConfig(enabled=not no_filter, target_language=language or "en"),
-        diarize=DiarizeConfig(
-            enabled=diarize or per_speaker or dominant_speaker,
-            mode=mode,
-            hf_token=hf_token,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-        ),
-        **config_kwargs,
-    )
+    # Pydantic enforces the numeric bounds; translate its ValidationError into the same
+    # message+hint panel every other failure uses, so a bad flag reads as a bad flag
+    # rather than as a library traceback with a pydantic.dev URL.
+    try:
+        config = DatasetConfig(
+            out_dir=out,
+            sample_rate=sample_rate,
+            segment_min_s=segment_min,
+            segment_max_s=segment_max,
+            normalize=normalize,
+            edge_pad_s=pad,
+            filters=FilterConfig(enabled=not no_filter, target_language=language),
+            diarize=DiarizeConfig(
+                enabled=diarize or per_speaker or dominant_speaker,
+                mode=mode,
+                hf_token=hf_token,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            ),
+            **config_kwargs,
+        )
+    except ValidationError as exc:
+        _print_error(InvalidOptionError(_format_option_errors(exc), hint=_DATASET_OPTION_HINT))
+        raise typer.Exit(code=1) from exc
     m = model.value
     try:
         path = Path(source).expanduser()
@@ -299,21 +342,32 @@ def dataset(
         elif extract_video_id(source) is not None:
             report = _with_status(
                 "Building dataset",
-                lambda: build_dataset_from_youtube(
+                lambda: build_dataset_from_media_url(
                     source, config=config, model_size=m, language=language, vad_filter=vad
                 ),
             )
         elif source.startswith(("http://", "https://")):
-            report = build_dataset_from_feed(
-                source,
-                config=config,
-                model_size=m,
-                language=language,
-                vad_filter=vad,
-                limit=limit,
-                on_item=_announce_source,
-                resume=not no_resume,
-            )
+            # An http(s) source is either a podcast feed or a media page. Only fetching
+            # tells them apart, so try the feed and fall back to yt-dlp — which covers
+            # Dailymotion, SoundCloud, Twitch and ~1800 other sites, not just YouTube.
+            try:
+                report = build_dataset_from_feed(
+                    source,
+                    config=config,
+                    model_size=m,
+                    language=language,
+                    vad_filter=vad,
+                    limit=limit,
+                    on_item=_announce_source,
+                    resume=not no_resume,
+                )
+            except FeedError:
+                report = _with_status(
+                    "Building dataset",
+                    lambda: build_dataset_from_media_url(
+                        source, config=config, model_size=m, language=language, vad_filter=vad
+                    ),
+                )
         else:
             report = _with_status(
                 f"Building dataset from {path.name}",
@@ -322,6 +376,9 @@ def dataset(
                 ),
             )
         _print_dataset_summary(report)
+        sources = getattr(report, "sources", None)
+        if sources is not None:
+            _exit_for_failures(sum(1 for s in sources if not s.ok), len(sources))
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130) from None
@@ -354,6 +411,9 @@ def _print_dataset_summary(report: object) -> None:
     if sources is not None:
         ok = sum(1 for s in sources if s.ok)
         body += f"\n[dim]{ok}/{len(sources)} sources[/dim]"
+        for source in sources:
+            if not source.ok:
+                body += f"\n[red]✗[/red] {escape(source.label)}: {escape(source.error or '')}"
     console.print(Panel.fit(body, title="hearsay dataset", border_style="green"))
     if report.drops_by_reason:  # type: ignore[attr-defined]
         console.print(f"[dim]dropped by: {report.drops_by_reason}[/dim]")  # type: ignore[attr-defined]
@@ -461,7 +521,13 @@ def ingest(
         elif video_id is not None:
             _run_single(_ingest_youtube_source(source, opts), video_id, opts)
         elif source.startswith(("http://", "https://")):
-            _run_feed(source, opts)
+            # Feed or media page — only fetching tells them apart. Falling back to the
+            # transcribe path means any yt-dlp site works, not just YouTube (those
+            # sites have no caption API, so they go straight to local transcription).
+            try:
+                _run_feed(source, opts)
+            except FeedError:
+                _run_single(_transcribe_youtube(source, opts, forced=True), _url_stem(source), opts)
         else:
             _run_single(_ingest_file(path, opts), path.stem, opts)
     except KeyboardInterrupt:
@@ -507,6 +573,13 @@ def _ingest_file(path: Path, opts: _Options) -> Document:
             vad_filter=opts.vad,
             on_progress=cb,
         )
+
+
+def _url_stem(url: str) -> str:
+    """A filename stem for a media URL: its last path segment, else its host."""
+    parsed = urlparse(url)
+    tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    return slugify(tail or parsed.hostname or "media")
 
 
 def _ingest_youtube_source(url: str, opts: _Options) -> Document:
@@ -613,6 +686,7 @@ def _run_batch_or_list(
 
     results = run_batch(selected, write, on_item=announce)
     _print_summary(results, opts.output_dir)
+    _exit_for_failures(sum(1 for r in results if not r.ok), len(results))
 
 
 def _make_output_dir(output_dir: Path) -> None:
@@ -726,6 +800,18 @@ def _print_summary(results: list, output_dir: Path) -> None:
     if failed:
         summary += f", [red]{failed} failed[/red]"
     console.print(f"{summary} · → [bold]{output_dir}/[/bold]")
+
+
+def _exit_for_failures(failed: int, total: int) -> None:
+    """Exit non-zero when a batch lost work, so scripts and CI can see it.
+
+    A batch that printed a red ✗ for every item still exited 0, which reads as success
+    to everything except a human looking at the table. 2 = nothing succeeded,
+    1 = partial, 0 = clean.
+    """
+    if not failed:
+        return
+    raise typer.Exit(code=2 if failed == total else 1)
 
 
 def _print_success(document: Document, destination: Path) -> None:
