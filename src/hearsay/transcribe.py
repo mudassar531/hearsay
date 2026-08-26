@@ -42,6 +42,71 @@ PARAKEET_MODELS = {
 
 # Whisper size used when ``auto`` falls back off Parakeet.
 DEFAULT_WHISPER = "small"
+# Languages where the small checkpoints do not merely lose accuracy but produce the
+# wrong thing entirely. Measured on Uzbek: `small` returns romanised approximations,
+# `medium` collapses into Khmer and Georgian glyphs, and only `large-v3` returns
+# readable Uzbek. Whisper's own per-language WER puts all of these in its worst tier,
+# so `auto` opens the large checkpoint for them instead of shipping confident nonsense.
+LOW_RESOURCE_WHISPER = "large-v3"
+LOW_RESOURCE_LANGUAGES = frozenset(
+    [
+        "am",
+        "az",
+        "ba",
+        "be",
+        "bo",
+        "br",
+        "cy",
+        "fo",
+        "gl",
+        "gu",
+        "ha",
+        "haw",
+        "hy",
+        "jw",
+        "ka",
+        "kk",
+        "km",
+        "kn",
+        "la",
+        "lb",
+        "ln",
+        "lo",
+        "mg",
+        "mi",
+        "mk",
+        "ml",
+        "mn",
+        "mr",
+        "mt",
+        "my",
+        "ne",
+        "nn",
+        "oc",
+        "pa",
+        "ps",
+        "sa",
+        "sd",
+        "si",
+        "sn",
+        "so",
+        "sq",
+        "su",
+        "sw",
+        "ta",
+        "te",
+        "tg",
+        "tk",
+        "tl",
+        "tt",
+        "uk",
+        "ur",
+        "uz",
+        "yi",
+        "yo",
+        "yue",
+    ]
+)
 # Parakeet TDT 0.6b v3 is multilingual over exactly these 25 European languages. It does
 # not refuse anything else — it transliterates it into confident nonsense, so an Urdu or
 # Arabic recording comes back as fluent-looking Latin gibberish with no error anywhere.
@@ -133,6 +198,7 @@ def transcribe_audio(
     local_files_only: bool = False,
     vad_filter: bool = True,
     word_timestamps: bool = False,
+    prompt: str | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> TranscriptionResult:
     """Transcribe an audio/video file into timed segments.
@@ -148,6 +214,10 @@ def transcribe_audio(
         vad_filter: Voice-activity detection (Whisper only). ``True`` (default)
             skips silence/music beds — right for speech. Set ``False`` for
             music/songs. Parakeet ignores this (it has no VAD pre-filter).
+        prompt: Text prefixed to the decoder as context (Whisper only). Steers spelling
+            and, for a language written in more than one script, which one comes back —
+            Uzbek returned 38% Latin / 61% Cyrillic unprompted, and 100% of either with
+            a one-line sample of that script. Mixed orthography ruins a TTS dataset.
         word_timestamps: When True, also return engine-agnostic word-level
             timings on ``result.words`` (for dataset mode). Default False, so the
             markdown/JSON path is unchanged and pays no extra cost.
@@ -190,6 +260,7 @@ def transcribe_audio(
     return _transcribe_whisper(
         path,
         model_size=identifier,
+        prompt=prompt,
         # Deliberately NOT `language or detected`: the probe runs on the *tiny*
         # checkpoint and only has to be right enough to pick an engine. Whisper detects
         # again during the real decode with the model actually being used, which is
@@ -220,6 +291,37 @@ def detect_language(path: Path, *, local_files_only: bool = False) -> str | None
     except Exception:  # a probe is an optimisation, never a reason to fail the job
         return None
     return language if probability >= _DETECT_MIN_PROBABILITY else None
+
+
+# A language written in more than one script comes back in whichever the decoder
+# prefers: unprompted Uzbek measured 38% Latin / 61% Cyrillic within a single clip.
+# Seeding the decoder with a line of the target script does pin it to 100% — but on
+# audio the model cannot read, Whisper emits that seed *as the transcript*: large-v3 on
+# a 20s Uzbek news clip returned the prompt verbatim and nothing else. For a training
+# set that is a clip paired with words nobody said, so hearsay never sets a prompt on
+# its own. The real answer to a language Whisper cannot read is a model that can —
+# pass one to --model. `prompt=` stays available for callers who want it knowingly.
+_SCRIPT_SAMPLES = {
+    ("uz", "latn"): "Assalomu alaykum. O'zbekiston Respublikasi haqida gaplashamiz.",
+    ("uz", "cyrl"): "Ассалому алайкум. Ўзбекистон Республикаси ҳақида гаплашамиз.",
+    ("sr", "latn"): "Dobar dan. Razgovaramo o Srbiji i njenoj istoriji.",
+    ("sr", "cyrl"): "Добар дан. Разговарамо о Србији и њеној историји.",  # noqa: RUF001
+}
+_DEFAULT_SCRIPTS = {"uz": "latn", "sr": "cyrl"}
+
+
+def script_prompt(language: str | None) -> str | None:
+    """A decoder seed that pins the output script, for a caller that opts in.
+
+    ``uz`` gives Latin, ``uz-Cyrl`` Cyrillic. NOT applied automatically — see the note
+    above: a seed the model cannot ground in the audio comes back as the transcript.
+    """
+    if not language:
+        return None
+    parts = language.strip().lower().replace("_", "-").split("-")
+    base = parts[0]
+    script = parts[1] if len(parts) > 1 else _DEFAULT_SCRIPTS.get(base)
+    return _SCRIPT_SAMPLES.get((base, script or ""))
 
 
 def normalize_language(language: str | None) -> str | None:
@@ -258,16 +360,39 @@ def _resolve_engine(model_size: str, language: str | None = None) -> tuple[str, 
     if model_size == "auto":
         if _parakeet_available() and (language is None or language in PARAKEET_LANGUAGES):
             return "parakeet", PARAKEET_MODELS["parakeet"]
+        if language in LOW_RESOURCE_LANGUAGES:
+            return "whisper", LOW_RESOURCE_WHISPER
         return "whisper", DEFAULT_WHISPER
     if model_size in PARAKEET_MODELS:
         repo = os.environ.get("HEARSAY_PARAKEET_MODEL") or PARAKEET_MODELS[model_size]
         return "parakeet", repo
     if model_size in WHISPER_SIZES:
         return "whisper", model_size
+    if _is_custom_whisper(model_size):
+        # faster-whisper accepts a CTranslate2 repo id or a local directory wherever it
+        # accepts a size. Passing those through is what makes low-resource languages
+        # usable at all: stock Whisper saw 0.3 hours of Uzbek and scores ~90% WER on
+        # FLEURS uz, while community fine-tunes trained on hundreds of hours reach single
+        # digits. hearsay ships no such model and cannot vouch for one — it just stops
+        # standing in the way of using it.
+        return "whisper", model_size
     raise TranscriptionError(
         f"Unknown transcription model: {model_size!r}",
-        hint=f"Choose one of: auto, {', '.join(PARAKEET_MODELS)}, {', '.join(WHISPER_SIZES)}",
+        hint=f"Choose one of: auto, {', '.join(PARAKEET_MODELS)}, {', '.join(WHISPER_SIZES)} "
+        "— or pass a CTranslate2 Whisper model: a Hugging Face id like "
+        "'org/model-ct2', or a path to a converted local directory.",
     )
+
+
+def _is_custom_whisper(model_size: str) -> bool:
+    """True when ``model_size`` names a CTranslate2 model rather than a built-in size.
+
+    A Hugging Face id (``org/name``) or an existing local directory. Anything else is a
+    typo and should be reported as one rather than handed to the loader.
+    """
+    if "/" in model_size or "\\" in model_size:
+        return True
+    return Path(model_size).is_dir()
 
 
 def resolve_method(model_size: str) -> str:
@@ -467,6 +592,7 @@ def _transcribe_whisper(
     vad_filter: bool,
     word_timestamps: bool,
     on_progress: ProgressCallback | None,
+    prompt: str | None = None,
 ) -> TranscriptionResult:
     """Transcribe via faster-whisper on CPU (int8)."""
     model = _load_whisper(model_size, local_files_only=local_files_only)
@@ -478,7 +604,11 @@ def _transcribe_whisper(
     raw_words: list = []  # faster-whisper Word objects, only when word_timestamps
     try:
         segment_iter, info = model.transcribe(
-            str(path), language=language, vad_filter=vad_filter, word_timestamps=word_timestamps
+            str(path),
+            language=language,
+            vad_filter=vad_filter,
+            word_timestamps=word_timestamps,
+            initial_prompt=prompt,
         )
         for seg in segment_iter:
             raw.append((seg.text, seg.start, seg.end))

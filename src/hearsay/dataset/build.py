@@ -51,6 +51,7 @@ from hearsay.feeds import Episode, Feed, download_episode, fetch_feed
 from hearsay.models import SourceMetadata, Word
 from hearsay.transcribe import (
     DEFAULT_MODEL,
+    LOW_RESOURCE_LANGUAGES,
     TranscriptionResult,
     resolve_method,
     transcribe_audio,
@@ -130,6 +131,27 @@ def _format_warnings(formats: list[str]) -> list[str]:
     """Warn about index formats that cannot coexist in one dataset folder."""
     chosen = set(formats)
     return [_HF_LJSPEECH_CLASH] if {"hf", "ljspeech"} <= chosen else []
+
+
+_LOW_RESOURCE_WARNING = (
+    "{language} is one of the languages stock Whisper barely saw in training (Whisper's "
+    "own FLEURS table puts Uzbek at ~90% word error — worse than transcribing nothing). "
+    "Clips will be paired with text that is largely wrong. Point --model at a "
+    "CTranslate2 fine-tune for this language instead; community ones reach single-digit "
+    "error, and hearsay accepts a Hugging Face id or a local path."
+)
+
+
+def _low_resource_warnings(model_size: str, language: str | None) -> list[str]:
+    """Warn when a stock Whisper is being used on a language it cannot really read.
+
+    A custom model is assumed to be the fine-tune this is asking for, so it is exempt.
+    """
+    if not language or language.split("-")[0] not in LOW_RESOURCE_LANGUAGES:
+        return []
+    if "/" in model_size or Path(model_size).is_dir():
+        return []
+    return [_LOW_RESOURCE_WARNING.format(language=language)]
 
 
 def _alignment_warnings(model_size: str) -> list[str]:
@@ -216,6 +238,7 @@ def build_dataset(
     _make_wavs_dir(config.out_dir)
     diarizer, warnings = _resolve_diarizer(config, diarizer)
     warnings += _format_warnings(config.formats)
+    warnings += _low_resource_warnings(transcription_method or "", language)
     if transcription_method in _ALIGNMENT_RISK_MODELS:
         warnings.append(_ALIGNMENT_WARNING.format(method=transcription_method))
     src_rate = probe_sample_rate(source_audio)

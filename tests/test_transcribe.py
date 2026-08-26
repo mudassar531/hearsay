@@ -236,3 +236,96 @@ def test_normalize_language_suggests_the_code_for_a_name() -> None:
         transcribe.normalize_language("urdu")
     assert "'ur'" in excinfo.value.message
     assert "ISO-639-1" in excinfo.value.hint
+
+
+# --- low-resource languages ------------------------------------------------
+
+
+def test_auto_opens_the_large_model_for_low_resource_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`small` does not merely lose accuracy on these languages, it returns the wrong
+    thing. Measured on Uzbek: `small` gives romanised approximations and `medium`
+    collapses into Khmer and Georgian glyphs; only `large-v3` returns readable Uzbek."""
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    for code in ("uz", "ur", "ps", "ta", "mn"):
+        engine, size = transcribe._resolve_engine("auto", code)
+        assert (engine, size) == ("whisper", transcribe.LOW_RESOURCE_WHISPER), code
+
+
+def test_auto_keeps_the_fast_default_for_well_served_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The large model is ~3 GB; it is opened where it changes the answer, not always.
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    for code in ("en", "es", "fr", "de"):
+        assert transcribe._resolve_engine("auto", code) == ("whisper", transcribe.DEFAULT_WHISPER)
+
+
+# --- script pinning --------------------------------------------------------
+
+
+def test_script_prompt_pins_a_dual_script_language() -> None:
+    """Unprompted Uzbek measured 38% Latin / 61% Cyrillic *within one clip*, and 100%
+    of either with a one-line sample as context. Mixed orthography ruins a dataset."""
+    latin = transcribe.script_prompt("uz")
+    cyrillic = transcribe.script_prompt("uz-Cyrl")
+    assert latin and cyrillic and latin != cyrillic
+    assert any("Ѐ" <= c <= "ӿ" for c in cyrillic), "the Cyrillic prompt must be Cyrillic"
+    assert not any("Ѐ" <= c <= "ӿ" for c in latin), "the Latin prompt must be Latin"
+    assert transcribe.script_prompt("uz-Latn") == latin  # explicit == default for uz
+
+
+def test_script_prompt_is_absent_for_single_script_languages() -> None:
+    for code in ("en", "es", "ur", "ar", None, ""):
+        assert transcribe.script_prompt(code) is None
+
+
+def test_script_subtag_does_not_reach_the_decoder() -> None:
+    # Whisper takes ISO-639-1; the subtag is hearsay's, for choosing the prompt.
+    assert transcribe.normalize_language("uz-Cyrl") == "uz"
+    assert transcribe.normalize_language("sr-Latn") == "sr"
+
+
+def test_hearsay_never_sets_a_prompt_on_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prompt the model cannot ground in the audio comes back AS the transcript.
+
+    Measured: large-v3 on a 20s Uzbek news clip, seeded with one line of Latin Uzbek,
+    returned that seed verbatim and nothing else. In a training set that is a clip
+    paired with words nobody said — so the seed is never applied automatically.
+    """
+    seen: dict = {}
+
+    def fake_whisper(path, *, model_size, language=None, prompt=None, **kwargs):
+        seen["prompt"] = prompt
+        return TranscriptionResult(
+            segments=[], language="uz", duration_s=1.0, model_size=model_size, method="w"
+        )
+
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    monkeypatch.setattr(transcribe, "_transcribe_whisper", fake_whisper)
+    transcribe.transcribe_audio(SAMPLE, model_size="auto", language="uz")
+    assert seen["prompt"] is None
+
+
+def test_a_caller_can_still_pass_a_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+
+    def fake_whisper(path, *, model_size, language=None, prompt=None, **kwargs):
+        seen["prompt"] = prompt
+        return TranscriptionResult(
+            segments=[], language="uz", duration_s=1.0, model_size=model_size, method="w"
+        )
+
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    monkeypatch.setattr(transcribe, "_transcribe_whisper", fake_whisper)
+    transcribe.transcribe_audio(SAMPLE, model_size="auto", language="uz", prompt="my own context")
+    assert seen["prompt"] == "my own context"
+
+
+def test_custom_whisper_models_are_accepted() -> None:
+    """Stock Whisper saw 0.3 hours of Uzbek and scores ~90% WER on FLEURS uz; a
+    community fine-tune is the only usable option, so --model must accept one."""
+    assert transcribe._resolve_engine("org/uzbek-ct2") == ("whisper", "org/uzbek-ct2")
+    with pytest.raises(TranscriptionError, match="Unknown transcription model"):
+        transcribe._resolve_engine("larg-v3")

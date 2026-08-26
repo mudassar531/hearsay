@@ -303,10 +303,16 @@ def test_unsupported_local_file_is_friendly(
     assert "unsupported" in result.output.lower()
 
 
-def test_invalid_model_choice_rejected() -> None:
-    result = runner.invoke(app, ["https://youtu.be/rStL7niR7gs", "--model", "huge"])
-    assert result.exit_code == 2  # Typer rejects the bad enum choice
+def test_invalid_model_choice_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # --model now accepts a CTranslate2 repo id or local path as well as a size, so the
+    # check moved from Typer's enum to hearsay, which can say what would have worked.
+    monkeypatch.chdir(tmp_path)
+    clip = tmp_path / "a.wav"
+    clip.write_bytes((FIXTURES / "sample.wav").read_bytes())
+    result = runner.invoke(app, [str(clip), "--model", "huge"])
+    assert result.exit_code == 1
     assert "huge" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_existing_file_wins_over_youtube_substring_in_path(

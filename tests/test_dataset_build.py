@@ -391,3 +391,43 @@ def test_a_thoroughly_broken_source_still_fails_loudly(
     )
     with pytest.raises(AudioExportError):
         build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
+
+
+def test_stock_whisper_on_a_low_resource_language_warns(tmp_path: Path) -> None:
+    """Whisper's own FLEURS table puts Uzbek at ~90% WER — worse than transcribing
+    nothing. Clips would ship paired with text that is largely wrong, and no downstream
+    filter can see it, so the build has to say so."""
+    report = build_dataset(
+        SAMPLE,
+        _synthetic_words(),
+        _meta(),
+        config=DatasetConfig(out_dir=tmp_path, filters=_NO_FILTER),
+        language="uz",
+        transcription_method="whisper-large-v3",
+    )
+    assert any("barely saw in training" in w for w in report.warnings)
+
+
+def test_a_language_specific_model_is_not_warned_about(tmp_path: Path) -> None:
+    # A custom model IS the fine-tune the warning asks for.
+    report = build_dataset(
+        SAMPLE,
+        _synthetic_words(),
+        _meta(),
+        config=DatasetConfig(out_dir=tmp_path, filters=_NO_FILTER),
+        language="uz",
+        transcription_method="org/uzbek-ct2",
+    )
+    assert not any("barely saw in training" in w for w in report.warnings)
+
+
+def test_well_served_languages_are_not_warned_about(tmp_path: Path) -> None:
+    report = build_dataset(
+        SAMPLE,
+        _synthetic_words(),
+        _meta(),
+        config=DatasetConfig(out_dir=tmp_path, filters=_NO_FILTER),
+        language="en",
+        transcription_method="whisper-small",
+    )
+    assert not any("barely saw in training" in w for w in report.warnings)

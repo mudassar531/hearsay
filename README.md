@@ -144,6 +144,24 @@ voice-data/
 - **Language is detected, not assumed.** The script and speaking-rate filters follow
   the language transcription detected, so non-English and non-Latin sources build
   normally; pass `--lang` only to force one.
+- **Low-resource languages: bring a model that speaks them.** Stock Whisper is not
+  merely weak on some languages, it is unusable — its own FLEURS table scores Uzbek at
+  **90% word error**, because it trained on *18 minutes* of Uzbek. `auto` opens
+  `large-v3` for those ~50 languages rather than `small`, which helps, but the real fix
+  is a fine-tune: `--model` accepts any CTranslate2 Whisper model, a Hugging Face id or
+  a local path. Community Uzbek models reach single-digit error. hearsay warns when you
+  are pointing stock Whisper at a language it cannot read.
+
+  ```bash
+  # Stock Whisper, Uzbek news:  "Iran xafsizli kushlariga madxiya, sadıklar koshıqı"
+  # An Uzbek fine-tune:         "eron xavfsizlik kuchlariga madxiya, sodiqlar qo'shig'i"
+  hearsay dataset "https://youtu.be/VIDEO_ID" --lang uz \
+      --model AlexAnoshka/fast-whisper-uz-rubaistt-v2-medium-ct2
+  ```
+
+  Any Whisper fine-tune works once converted to CTranslate2
+  (`ct2-transformers-converter --model <hf-id> --output_dir ./model-ct2`). Word
+  timestamps survive conversion, so dataset mode slices normally.
 - **`--format hf` wants its own folder.** HuggingFace `audiofolder` refuses a tree
   containing both a `metadata.csv` and a `metadata.jsonl`, so pair `hf` with `jsonl`
   rather than with the default `ljspeech` (hearsay warns if you mix them).
