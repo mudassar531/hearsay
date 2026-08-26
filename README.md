@@ -270,7 +270,9 @@ hearsay web --host 0.0.0.0       # expose on your LAN (unauthenticated — caref
   <img src="demo/webui.gif" alt="hearsay web UI" width="80%">
 </p>
 
-Videos, playlists, podcast feeds and file uploads all go through the UI. Batch sources
+Videos, playlists, podcast feeds and file uploads all go through the UI. The **Model**
+box takes a built-in size or any CTranslate2 model id, so a language fine-tune works in
+the browser exactly as it does on the CLI. Batch sources
 are capped at the first 5 items in the browser (the whole build streams back in one
 response) — use the CLI for a full playlist or a hundred-episode feed.
 

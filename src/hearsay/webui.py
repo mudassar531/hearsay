@@ -650,6 +650,8 @@ _PAGE = r"""<!doctype html>
   .mode-btn.on{background:var(--line2);color:var(--bg)}
   .mode-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .copts label{display:flex;align-items:center;gap:7px;cursor:pointer;text-transform:uppercase;letter-spacing:.06em;font-size:10.5px}
+  .model input{background:var(--bg);border:1px solid var(--line);color:var(--fg);
+    font:inherit;font-size:11px;padding:4px 8px;width:190px}
   .copts select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:3px 6px;
     font:inherit;font-size:10.5px;text-transform:none;letter-spacing:0;max-width:130px}
   .copts input[type=text]{width:96px;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:4px 8px;
@@ -687,16 +689,18 @@ _PAGE = r"""<!doctype html>
       <div class="top-title" id="topTitle">New transcript</div>
       <div class="model" title="Transcription model">
         <span class="lbl">Model</span>
-        <select id="model">
-          <option value="auto">auto</option>
-          <option value="parakeet">parakeet</option>
-          <option value="parakeet-en">parakeet-en</option>
-          <option value="tiny">whisper tiny</option>
-          <option value="base">whisper base</option>
-          <option value="small">whisper small</option>
-          <option value="medium">whisper medium</option>
-          <option value="large-v3">whisper large-v3</option>
-        </select>
+        <input id="model" list="models" value="auto" spellcheck="false"
+          title="A built-in size, or any CTranslate2 Whisper model — a Hugging Face id or a local path. A fine-tune is the only usable option for some languages.">
+        <datalist id="models">
+          <option value="auto">fastest available</option>
+          <option value="parakeet">Apple Silicon, 25 European languages</option>
+          <option value="parakeet-en">Apple Silicon, English only</option>
+          <option value="tiny"></option>
+          <option value="base"></option>
+          <option value="small"></option>
+          <option value="medium"></option>
+          <option value="large-v3">best stock quality, slowest</option>
+        </datalist>
       </div>
       <button class="icon-btn" id="theme" title="Toggle theme">
         <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="6.5"/><path d="M9 2.5a6.5 6.5 0 0 1 0 13z" fill="currentColor" stroke="none"/></svg>
@@ -796,7 +800,7 @@ $('#toggle').onclick = () => $('#app').classList.toggle('collapsed');
 
 /* ---- model persistence ---- */
 $('#model').value = localStorage.getItem('hs-model') || 'auto';
-$('#model').onchange = e => localStorage.setItem('hs-model', e.target.value);
+$('#model').onchange = e => localStorage.setItem('hs-model', e.target.value.trim());
 
 /* ---- history (localStorage) ---- */
 const HKEY = 'hs-history';
@@ -942,7 +946,7 @@ function datasetNode(d){
 async function submit(){
   const text=$('#input').value.trim();
   if(!pickedFile && !text) return;
-  const model=$('#model').value, lang=$('#lang').value.trim(),
+  const model=$('#model').value.trim()||'auto', lang=$('#lang').value.trim(),
         vad=$('#vad').checked, transcribe=$('#transcribe').checked, dataset=datasetMode();
   const sourceLabel = pickedFile ? ('File · '+pickedFile.name) : text;
 
