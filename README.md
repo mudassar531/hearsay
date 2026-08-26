@@ -39,7 +39,7 @@ podcast feeds. Nothing leaves your machine.
 
 - [How it works](#how-it-works) · [Install](#install)
 - [🎙️ Build TTS/STT datasets](#-build-ttsstt-training-datasets) · [📄 Clean markdown](#-clean-timestamped-markdown)
-- [Web UI](#web-ui) · [Transcription engines](#transcription-engines) · [MCP server](#give-your-agent-ears)
+- [Web UI](#web-ui) · [Transcription engines](#transcription-engines) · [Languages](#languages-what-actually-works) · [MCP server](#give-your-agent-ears)
 - [How it compares](#how-it-compares) · [CLI reference](#cli-reference) · [Requirements](#requirements)
 
 ## How it works
@@ -302,7 +302,7 @@ locally with the fastest engine your machine has. `--model auto` (the default) p
 
 | Engine | When | Speed | Notes |
 | --- | --- | --- | --- |
-| **Parakeet** (NVIDIA Parakeet-TDT on Apple MLX) | Apple Silicon + `parakeet` extra | ~24× realtime (M1 Pro) | `parakeet-en` is English-only. `parakeet` advertises 25 European languages but **returns English for some of them** — see below; `auto` only uses it where that has been checked |
+| **Parakeet** (NVIDIA Parakeet-TDT on Apple MLX) | Apple Silicon + `parakeet` extra | ~24× realtime (M1 Pro) | `parakeet-en` is English-only. `parakeet` advertises 25 European languages but **returns English for some of them** ([measured](docs/language-verification.md)); `auto` only uses it where that has been checked |
 | **Whisper** (faster-whisper, CPU int8) | everywhere else, or an explicit size | ~7× realtime | sizes `tiny`…`large-v3`; `large-v3` is the multilingual ceiling |
 
 On Apple Silicon, Parakeet is about **3× faster** than `whisper-small` at comparable
@@ -314,6 +314,41 @@ offline use.
 > **Speech vs. music:** hearsay is tuned for spoken audio (podcasts, talks, interviews,
 > meetings), where transcription is accurate. For music, pass `--no-vad` so the vocals
 > aren't discarded — but expect a rough lyric transcript, since these are speech models.
+
+## Languages: what actually works
+
+Ten languages were built into datasets from real YouTube audio and measured end to end —
+audio/text pairing, script authenticity, structure, and loading the result in HuggingFace
+`datasets`. **[Full method and caveats →](docs/language-verification.md)**
+
+| language | clips | pairing mean / median | script | trainable |
+| --- | --- | --- | --- | --- |
+| Vietnamese `vi` | 22 | **0.999** / 1.00 | 22/22 | ✅ |
+| Turkish `tr` | 22 | **0.995** / 1.00 | 22/22 | ✅ |
+| Japanese `ja` | 25 | **0.986** / 1.00 | 25/25 | ✅ |
+| Spanish `es` | 26 | **0.975** / 1.00 | 26/26 | ✅ |
+| Korean `ko` | 23 | **0.971** / 1.00 | 23/23 | ✅ |
+| Russian `ru` | 24 | **0.968** / 0.97 | 24/24 | ✅ |
+| Hindi `hi` | 24 | **0.917** / 0.94 | 24/24 | ✅ |
+| Mandarin `zh` | 28 | **0.909** / 0.94 | 28/28 | ✅ |
+| Swahili `sw` | 18 | **0.939** / 0.97 | 18/18 | ⚠️ real Swahili, ~39% word error |
+| Bengali `bn` | 7 | **0.614** / 0.78 | 7/7 | ❌ needs a fine-tune |
+
+**Pairing** re-transcribes random clips with the same model and diffs each against its own
+row, so it measures what hearsay controls — does clip *N*'s audio go with clip *N*'s text —
+rather than ASR accuracy. Each is also scored against a *different* clip's text as a control;
+the gap ran +0.37 to +0.82, which is what a correct pairing looks like. **Script** counts
+clips whose text is in the language's real script *and* carries the characters it actually
+needs (Devanagari matras, kana for Japanese, Vietnamese diacritics).
+
+Previously verified the same way: English, Uzbek, Urdu, Arabic, Pashto, Polish.
+
+> **This is what the sweep is for.** It found five defects that produced *silently wrong*
+> data rather than an error — Parakeet returning English for Spanish, Bengali shipping
+> Telugu script under `language: "bn"`, six unusable languages that were never warned
+> about, and clips cut through the middle of numbers. All fixed in
+> [0.7.0](CHANGELOG.md). If a language does not work, hearsay should say so, not hand you
+> a plausible-looking dataset.
 
 ## Give your agent ears
 
@@ -438,6 +473,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [good first issues](docs/good-first-issues.md). Changes are documented in
 [CHANGELOG.md](CHANGELOG.md). hearsay does one thing well — turn media into clean
 markdown and training-ready datasets — and aims to keep doing exactly that.
+
+**How it's tested.** 412 tests run on every push and pull request (Python 3.11 and 3.12)
+alongside `ruff` and `mypy`. They run **offline** against committed fixtures — no network,
+no model downloads — so the suite is fast and deterministic; the model-gated tests skip
+cleanly when no checkpoint is cached. On top of that, dataset output is periodically
+verified against **real YouTube audio** in a language sweep
+([method and results](docs/language-verification.md)); every fix from that sweep ships with
+a regression test confirmed to fail against the pre-fix code.
 
 ## License
 
