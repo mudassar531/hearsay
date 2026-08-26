@@ -10,7 +10,7 @@ audio decode:
 * **internal_silence** — drop a clip with an internal inter-word gap longer than
   ``max_internal_gap_s`` (a join of two utterances).
 * **char_rate** — drop clips whose characters-per-second is implausible (skipped
-  for logographic scripts, where the measure is meaningless).
+  for logographic and space-free scripts, where the measure is meaningless).
 * **non_target_script** — drop clips whose text is mostly the wrong script for the
   target language (a dep-free proxy for a language mismatch).
 * **compression_ratio** — drop repetitive/hallucinated text (Whisper's gzip-ratio
@@ -45,6 +45,21 @@ _SCRIPT_RANGES: list[tuple[str, list[tuple[int, int]]]] = [
     ("hebrew", [(0x590, 0x5FF)]),
     ("arabic", [(0x600, 0x6FF)]),
     ("devanagari", [(0x900, 0x97F)]),
+    ("bengali", [(0x980, 0x9FF)]),
+    ("gurmukhi", [(0xA00, 0xA7F)]),
+    ("gujarati", [(0xA80, 0xAFF)]),
+    ("tamil", [(0xB80, 0xBFF)]),
+    ("telugu", [(0xC00, 0xC7F)]),
+    ("kannada", [(0xC80, 0xCFF)]),
+    ("malayalam", [(0xD00, 0xD7F)]),
+    ("sinhala", [(0xD80, 0xDFF)]),
+    ("thai", [(0xE00, 0xE7F)]),
+    ("lao", [(0xE80, 0xEFF)]),
+    ("myanmar", [(0x1000, 0x109F)]),
+    ("georgian", [(0x10A0, 0x10FF), (0x1C90, 0x1CBF)]),
+    ("ethiopic", [(0x1200, 0x137F)]),
+    ("khmer", [(0x1780, 0x17FF)]),
+    ("armenian", [(0x530, 0x58F)]),
     ("cjk", [(0x3040, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xAC00, 0xD7A3)]),
 ]
 # Map a target language code to its script. Codes absent here disable the
@@ -61,10 +76,24 @@ _LANG_SCRIPT = {
     # dataset can come back in the wrong script while the card still says "ur". Without
     # an entry here the script filter is disabled and nothing catches it.
     "ur": "arabic", "ps": "arabic", "sd": "arabic",
-    "hi": "devanagari", "mr": "devanagari",
+    "hi": "devanagari", "mr": "devanagari", "ne": "devanagari", "sa": "devanagari",
+    # Single-script languages. An absent entry disables the wrong-script filter
+    # silently, which is worst for exactly the low-resource languages most likely to
+    # come back in the wrong script: a real Bengali news bulletin returned Telugu and
+    # English under `language: "bn"` with zero non_target_script drops. Uzbek stays
+    # unmapped on purpose — it is written in both Latin and Cyrillic.
+    "bn": "bengali", "as": "bengali", "pa": "gurmukhi", "gu": "gujarati",
+    "ta": "tamil", "te": "telugu", "kn": "kannada", "ml": "malayalam",
+    "si": "sinhala", "th": "thai", "lo": "lao", "my": "myanmar",
+    "km": "khmer", "am": "ethiopic", "ka": "georgian", "hy": "armenian",
+    "sw": "latin", "af": "latin", "ca": "latin", "hr": "latin", "hu": "latin",
+    "sk": "latin", "sl": "latin", "lt": "latin", "lv": "latin", "et": "latin",
+    "is": "latin", "ms": "latin", "tl": "latin", "sq": "latin", "cy": "latin",
     "zh": "cjk", "ja": "cjk", "ko": "cjk",
 }  # fmt: skip
-_LOGOGRAPHIC = {"cjk"}
+# Scripts where a characters-per-second bound tuned on spaced Latin text is
+# meaningless: logographic (CJK) and the space-free abugidas/abjads.
+_UNSPACED_SCRIPTS = {"cjk", "thai", "lao", "myanmar", "khmer"}
 
 
 def _char_script(ch: str) -> str | None:
@@ -165,9 +194,9 @@ def _segment_drop_reason(
             return _drop(clip, "non_target_script", dominant[0], target_script, text)
 
     # Characters-per-second only makes sense for a known, space-delimited script —
-    # skip it for logographic (CJK) and unmapped target languages (their conventions
-    # differ, so the Latin-tuned bounds would mis-fire).
-    if target_script is not None and target_script not in _LOGOGRAPHIC and duration_s > 0:
+    # skip it for logographic/space-free scripts and unmapped target languages (their
+    # conventions differ, so the Latin-tuned bounds would mis-fire).
+    if target_script is not None and target_script not in _UNSPACED_SCRIPTS and duration_s > 0:
         cps = len(text) / duration_s
         if cps < config.min_chars_per_s:
             return _drop(clip, "char_rate", f"{cps:.1f}/s", f">={config.min_chars_per_s}/s", text)
