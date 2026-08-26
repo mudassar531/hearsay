@@ -159,6 +159,19 @@ voice-data/
       --model AlexAnoshka/fast-whisper-uz-rubaistt-v2-medium-ct2
   ```
 
+  **Which languages need one?** Whisper's own FLEURS word-error rates, from its paper:
+
+  | language | stock large-v3 | what to run |
+  | --- | --- | --- |
+  | Arabic `ar` | ~16% — fine | `--lang ar` |
+  | Urdu `ur` | usable | `--lang ur` — **always pass it**, or Whisper detects Hindi and returns Devanagari |
+  | Uzbek `uz` | ~90% — unusable | `--lang uz --model <an Uzbek CT2 fine-tune>` |
+  | Pashto `ps` | ~93% — unusable | `--lang ps --model <a Pashto CT2 fine-tune>` |
+
+  Pashto is the sharpest case: stock Whisper does not transcribe it so much as
+  transliterate it into Arabic/Dari, dropping the Pashto-only letters
+  (ټ ډ ړ ږ ښ ګ ڼ). The text looks plausible and is the wrong language.
+
   Any Whisper fine-tune works once converted to CTranslate2
   (`ct2-transformers-converter --model <hf-id> --output_dir ./model-ct2`). Word
   timestamps survive conversion, so dataset mode slices normally.
