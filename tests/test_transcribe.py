@@ -329,3 +329,29 @@ def test_custom_whisper_models_are_accepted() -> None:
     assert transcribe._resolve_engine("org/uzbek-ct2") == ("whisper", "org/uzbek-ct2")
     with pytest.raises(TranscriptionError, match="Unknown transcription model"):
         transcribe._resolve_engine("larg-v3")
+
+
+def test_a_wrong_model_id_blames_the_id_not_the_network() -> None:
+    """--model takes any Hugging Face id now, so a typo is the likeliest mistake.
+
+    The old hint said "check your network on first use", which sends someone hunting a
+    connection problem they do not have.
+    """
+    exc = Exception(
+        "401 Client Error. (Request ID: Root=1-abc;def)\n\n"
+        "Repository Not Found for url: https://huggingface.co/api/models/x/y/revision/main."
+    )
+    assert "Repository Not Found" in transcribe._load_failure(exc)
+    assert "Request ID" not in transcribe._load_failure(exc)
+    hint = transcribe._load_hint("x/y", exc)
+    assert "Check the id" in hint and "ct2-transformers-converter" in hint
+
+
+def test_a_gated_model_says_so() -> None:
+    hint = transcribe._load_hint("org/m", Exception("403 Forbidden: repo is gated"))
+    assert "gated" in hint and "HF_TOKEN" in hint
+
+
+def test_a_real_network_problem_still_says_network() -> None:
+    hint = transcribe._load_hint("small", Exception("Connection timed out"))
+    assert "network" in hint

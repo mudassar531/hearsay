@@ -694,9 +694,43 @@ def _load_whisper(model_size: str, *, local_files_only: bool):
         )
     except Exception as exc:
         raise TranscriptionError(
-            f"Could not load the '{model_size}' whisper model: {exc}",
-            hint=(
-                "The model downloads once (~tens of MB to ~1.5GB). Check your "
-                "network on first use, then it is cached for offline runs."
-            ),
+            f"Could not load the '{model_size}' whisper model: {_load_failure(exc)}",
+            hint=_load_hint(model_size, exc),
         ) from exc
+
+
+def _load_failure(exc: Exception) -> str:
+    """The first meaningful line of a loader error.
+
+    huggingface_hub errors carry a request id and a paragraph of guidance; showing all
+    of it buries the one sentence that says what went wrong.
+    """
+    for line in str(exc).splitlines():
+        line = line.strip()
+        if line and "Request ID" not in line:
+            return line[:200]
+    return str(exc)[:200]
+
+
+def _load_hint(model_size: str, exc: Exception) -> str:
+    """Point at the actual cause: a wrong model id, a gate, or the network.
+
+    Now that --model takes any Hugging Face id, "check your network" is the wrong
+    advice for by far the most likely mistake, which is a typo in the id.
+    """
+    text = str(exc).lower()
+    if "repository not found" in text or "404" in text:
+        return (
+            f"No model named '{model_size}' on Hugging Face. Check the id, and note it "
+            "must be a CTranslate2 conversion — a plain transformers Whisper repo needs "
+            "`ct2-transformers-converter` first."
+        )
+    if "gated" in text or "403" in text or "authorized" in text:
+        return (
+            f"'{model_size}' is gated. Accept its conditions on Hugging Face and set "
+            "HF_TOKEN, then try again."
+        )
+    return (
+        "The model downloads once (~tens of MB to ~3GB). Check your network on first "
+        "use, then it is cached for offline runs."
+    )
