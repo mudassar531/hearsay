@@ -393,10 +393,10 @@ def test_a_thoroughly_broken_source_still_fails_loudly(
         build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
 
 
-def test_stock_whisper_on_a_low_resource_language_warns(tmp_path: Path) -> None:
-    """Whisper's own FLEURS table puts Uzbek at ~90% WER — worse than transcribing
-    nothing. Clips would ship paired with text that is largely wrong, and no downstream
-    filter can see it, so the build has to say so."""
+def test_stock_whisper_on_an_unusable_language_warns(tmp_path: Path) -> None:
+    """Whisper's own FLEURS table puts Uzbek at ~90% WER and Pashto at ~93% — worse than
+    transcribing nothing. Clips would ship paired with text that is largely wrong, and no
+    downstream filter can see it, so the build has to say so."""
     report = build_dataset(
         SAMPLE,
         _synthetic_words(),
@@ -405,7 +405,7 @@ def test_stock_whisper_on_a_low_resource_language_warns(tmp_path: Path) -> None:
         language="uz",
         transcription_method="whisper-large-v3",
     )
-    assert any("barely saw in training" in w for w in report.warnings)
+    assert any("cannot really transcribe" in w for w in report.warnings)
 
 
 def test_a_language_specific_model_is_not_warned_about(tmp_path: Path) -> None:
@@ -418,7 +418,7 @@ def test_a_language_specific_model_is_not_warned_about(tmp_path: Path) -> None:
         language="uz",
         transcription_method="org/uzbek-ct2",
     )
-    assert not any("barely saw in training" in w for w in report.warnings)
+    assert not any("cannot really transcribe" in w for w in report.warnings)
 
 
 def test_well_served_languages_are_not_warned_about(tmp_path: Path) -> None:
@@ -430,4 +430,4 @@ def test_well_served_languages_are_not_warned_about(tmp_path: Path) -> None:
         language="en",
         transcription_method="whisper-small",
     )
-    assert not any("barely saw in training" in w for w in report.warnings)
+    assert not any("cannot really transcribe" in w for w in report.warnings)

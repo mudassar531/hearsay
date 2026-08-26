@@ -241,7 +241,7 @@ def test_normalize_language_suggests_the_code_for_a_name() -> None:
 # --- low-resource languages ------------------------------------------------
 
 
-def test_auto_opens_the_large_model_for_low_resource_languages(
+def test_auto_opens_the_large_model_where_small_handles_it_badly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`small` does not merely lose accuracy on these languages, it returns the wrong
