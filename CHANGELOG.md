@@ -4,6 +4,34 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 — 2026-08-27
+
+### Added
+
+- **A language fine-tune works in the web UI**, not just on the CLI. The Model box takes
+  a Hugging Face id or a local path alongside the built-in sizes. For Uzbek and Pashto
+  that is the difference between usable data and confident nonsense, so the browser
+  previously could not build a usable dataset in those languages at all.
+- **Per-language guidance in the README**, from Whisper's own FLEURS table: Arabic
+  ~16% WER and Urdu ~22.6% are ordinary, Uzbek ~90% and Pashto ~93.7% are not.
+
+### Fixed
+
+- **Urdu, Pashto and Sindhi had no target script**, so the `non_target_script` filter was
+  silently disabled for them — for exactly the languages most at risk. Measured on a real
+  Urdu podcast: Whisper detects the audio as Hindi (p=0.91) and emits Devanagari, so a
+  whole dataset can come back in the wrong script while the card still reads `language:
+  "ur"`. Uzbek is deliberately left unmapped, being written in two scripts.
+- **The low-resource warning was fired at languages that are fine.** Urdu and Arabic were
+  told "stock Whisper barely saw this language, ~90% word error, go find a fine-tune",
+  which is alarming and false. Choosing a model *size* and declaring a language
+  *unusable* are now separate sets, and the warning names the real failure: for Pashto
+  stock Whisper does not fail loudly, it transliterates into Arabic/Dari, so the text
+  reads fluently and is the wrong language.
+- **A wrong `--model` id blamed the network.** With any Hugging Face id accepted, a typo
+  is the likeliest mistake; the hint now distinguishes an unknown id, a gated repo and a
+  real network failure, and no longer buries the cause under a request id.
+
 ## 0.5.1 — 2026-08-26
 
 ### Fixed
