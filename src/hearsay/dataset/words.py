@@ -7,7 +7,10 @@ works identically regardless of engine. No I/O, no heavy imports — testable
 offline against plain stand-in objects.
 
 * faster-whisper: ``Word(word, start, end, probability)`` — a flat list per
-  segment (populated only when ``word_timestamps=True``). One token == one word.
+  segment (populated only when ``word_timestamps=True``). Usually one token per word,
+  but it splits inside a word often enough to matter (Uzbek ``qo'shig'i.`` arrives as
+  ``["qo'shig", "'i."]``); a leading space marks a genuine word start, so its absence
+  sets ``joins_left``.
 * Parakeet (parakeet-mlx): ``AlignedToken(id, text, start, duration, confidence,
   end)`` — *subword* pieces; a new word begins wherever a token's text starts
   with a literal space (not the SentencePiece ``U+2581``). Subwords are merged.
@@ -52,16 +55,22 @@ def words_from_whisper(whisper_words: Iterable[Any]) -> list[Word]:
     """Convert a flat iterable of faster-whisper ``Word`` objects to ``Word``s.
 
     Each input must expose ``.word``, ``.start``, ``.end`` and (optionally)
-    ``.probability``. Whisper already emits one token per word, so this is a
-    field rename. Whitespace-only words are dropped; the ``.word`` text (which
-    carries faster-whisper's leading space) is stripped.
+    ``.probability``. Whitespace-only words are dropped and the text is stripped, but
+    the leading space is read first: it is how faster-whisper marks a genuine word
+    start, and dropping that turned Uzbek ``qo'shig'i.`` into ``qo'shig 'i.``.
     """
     out: list[Word] = []
     for w in whisper_words:
         raw = getattr(w, "word", None)
-        text = str(raw).strip() if raw is not None else ""
+        if raw is None:
+            continue
+        raw = str(raw)
+        text = raw.strip()
         if not text:
             continue
+        # faster-whisper prefixes a token with a space exactly when it begins a new
+        # word; its absence means this token belongs to the one before it.
+        joins_left = not raw.startswith((" ", "\u00a0"))
         start = _finite_float(getattr(w, "start", 0.0), 0.0)
         end = _finite_float(getattr(w, "end", start), start)
         out.append(
@@ -70,6 +79,7 @@ def words_from_whisper(whisper_words: Iterable[Any]) -> list[Word]:
                 start_s=start,
                 end_s=end,
                 confidence=_clamp01(getattr(w, "probability", 1.0)),
+                joins_left=joins_left,
             )
         )
     return out

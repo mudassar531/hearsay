@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 
 from hearsay.dataset.models import DatasetSegment
 from hearsay.models import Word
@@ -484,6 +485,23 @@ def _isolation_scale(gap_after: list[float]) -> float:
     return max(median, _MIN_PAUSE_FLOOR_S)
 
 
+def _join_words(words: Iterable[Word]) -> str:
+    """Join words back into text, honouring tokens that continue the previous word.
+
+    ASR tokenizers split inside words, and a blind space rejoined Uzbek
+    ``["qo'shig", "'i."]`` as ``qo'shig 'i.`` — two broken tokens in the transcript
+    shipped alongside the audio. ``joins_left`` carries the engine's own answer.
+    """
+    out: list[str] = []
+    for word in words:
+        text = word.text.strip()
+        if out and word.joins_left:
+            out[-1] += text
+        else:
+            out.append(text)
+    return " ".join(out)
+
+
 def _materialize(
     words: list[Word],
     r_start: list[float],
@@ -499,7 +517,7 @@ def _materialize(
     non-blank words with single spaces. ``start_s``/``end_s`` are the range extent
     so the span contains every member word; ``oversized`` is honest (extent > max_s).
     """
-    text = " ".join(words[i].text.strip() for i in range(a, b + 1) if not blank[i])
+    text = _join_words(words[i] for i in range(a, b + 1) if not blank[i])
     lo, hi = _extent(r_start, r_end, a, b)
     return DatasetSegment(
         text=text,

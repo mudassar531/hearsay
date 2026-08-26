@@ -55,6 +55,13 @@ class Word(BaseModel):
     start_s: float
     end_s: float
     confidence: float = 1.0
+    # True when this token continues the previous word rather than starting a new one.
+    # ASR tokenizers split inside words — Whisper emits Uzbek "qo'shig'i." as
+    # ["qo'shig", "'i."] — and marks the difference with a leading space, which stripping
+    # the text would throw away. Rejoining with a blind space wrote "qo 'shig 'i.", so
+    # every Uzbek word carrying an okina, and every French elision, shipped as two
+    # broken tokens in the transcript paired with the audio.
+    joins_left: bool = False
 
 
 class Paragraph(BaseModel):

@@ -4,6 +4,18 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Words split by the tokenizer are rejoined without a stray space.** ASR tokenizers
+  split inside words — Whisper emits Uzbek `qo'shig'i.` as `["qo'shig", "'i."]` — and
+  mark a genuine word start with a leading space. hearsay stripped that space away and
+  then rejoined with a blind one, writing `qo'shig 'i.`: two broken tokens in the
+  transcript shipped alongside the audio. One fresh Uzbek video carried **98** such
+  words. Every Uzbek okina and every French elision hit this. English is unaffected
+  (Whisper keeps contractions whole), which is why it went unnoticed.
+
 ## 0.5.0 — 2026-08-26
 
 ### Added
