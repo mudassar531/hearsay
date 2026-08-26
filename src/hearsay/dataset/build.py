@@ -51,7 +51,7 @@ from hearsay.feeds import Episode, Feed, download_episode, fetch_feed
 from hearsay.models import SourceMetadata, Word
 from hearsay.transcribe import (
     DEFAULT_MODEL,
-    LOW_RESOURCE_LANGUAGES,
+    UNUSABLE_WITHOUT_FINE_TUNE,
     TranscriptionResult,
     resolve_method,
     transcribe_audio,
@@ -134,11 +134,11 @@ def _format_warnings(formats: list[str]) -> list[str]:
 
 
 _LOW_RESOURCE_WARNING = (
-    "{language} is one of the languages stock Whisper barely saw in training (Whisper's "
-    "own FLEURS table puts Uzbek at ~90% word error — worse than transcribing nothing). "
-    "Clips will be paired with text that is largely wrong. Point --model at a "
-    "CTranslate2 fine-tune for this language instead; community ones reach single-digit "
-    "error, and hearsay accepts a Hugging Face id or a local path."
+    "stock Whisper cannot really transcribe {language}: its own FLEURS table puts this "
+    "language above 90% word error, and for some it transliterates into a neighbouring "
+    "language instead of failing, so the text looks fluent and is wrong. Clips will be "
+    "paired with text that is largely wrong. Point --model at a CTranslate2 fine-tune "
+    "for this language; hearsay accepts a Hugging Face id or a local path."
 )
 
 
@@ -147,7 +147,7 @@ def _low_resource_warnings(model_size: str, language: str | None) -> list[str]:
 
     A custom model is assumed to be the fine-tune this is asking for, so it is exempt.
     """
-    if not language or language.split("-")[0] not in LOW_RESOURCE_LANGUAGES:
+    if not language or language.split("-")[0] not in UNUSABLE_WITHOUT_FINE_TUNE:
         return []
     if "/" in model_size or Path(model_size).is_dir():
         return []

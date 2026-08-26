@@ -42,13 +42,12 @@ PARAKEET_MODELS = {
 
 # Whisper size used when ``auto`` falls back off Parakeet.
 DEFAULT_WHISPER = "small"
-# Languages where the small checkpoints do not merely lose accuracy but produce the
-# wrong thing entirely. Measured on Uzbek: `small` returns romanised approximations,
-# `medium` collapses into Khmer and Georgian glyphs, and only `large-v3` returns
-# readable Uzbek. Whisper's own per-language WER puts all of these in its worst tier,
-# so `auto` opens the large checkpoint for them instead of shipping confident nonsense.
+# Languages the small checkpoints handle badly enough that `auto` should open the large
+# one instead. Measured on Uzbek: `small` returns romanised approximations and `medium`
+# collapses into Khmer and Georgian glyphs. This is about picking a *size*, and says
+# nothing about whether the result is usable — see UNUSABLE_WITHOUT_FINE_TUNE.
 LOW_RESOURCE_WHISPER = "large-v3"
-LOW_RESOURCE_LANGUAGES = frozenset(
+NEEDS_LARGE_WHISPER = frozenset(
     [
         "am",
         "az",
@@ -138,6 +137,35 @@ PARAKEET_LANGUAGES = frozenset(
         "sl",
         "sv",
         "uk",
+    ]
+)
+# Languages where even large-v3 is not usable, from Whisper's own FLEURS table: Uzbek
+# 90.2 and Pashto 93.7 word error at large-v2 — above 100% for the smaller sizes, i.e.
+# worse than transcribing nothing. Pashto is the starker case: it does not fail loudly
+# but transliterates into Arabic/Dari, so the text looks fluent and is the wrong
+# language. These need a fine-tune, and hearsay should say so. Kept deliberately narrow:
+# Urdu sits at 22.6 and Arabic at 16.0, which are ordinary error rates, not this.
+UNUSABLE_WITHOUT_FINE_TUNE = frozenset(
+    [
+        "am",
+        "as",
+        "bo",
+        "km",
+        "ln",
+        "lo",
+        "mg",
+        "mn",
+        "my",
+        "ps",
+        "sd",
+        "si",
+        "sn",
+        "so",
+        "su",
+        "tg",
+        "tk",
+        "uz",
+        "yo",
     ]
 )
 # Whisper size used purely to identify the language before picking an engine: the
@@ -360,7 +388,7 @@ def _resolve_engine(model_size: str, language: str | None = None) -> tuple[str, 
     if model_size == "auto":
         if _parakeet_available() and (language is None or language in PARAKEET_LANGUAGES):
             return "parakeet", PARAKEET_MODELS["parakeet"]
-        if language in LOW_RESOURCE_LANGUAGES:
+        if language in NEEDS_LARGE_WHISPER:
             return "whisper", LOW_RESOURCE_WHISPER
         return "whisper", DEFAULT_WHISPER
     if model_size in PARAKEET_MODELS:
