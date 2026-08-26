@@ -51,6 +51,7 @@ from hearsay.feeds import Episode, Feed, download_episode, fetch_feed
 from hearsay.models import SourceMetadata, Word
 from hearsay.transcribe import (
     DEFAULT_MODEL,
+    UNKNOWN_LANGUAGE,
     UNUSABLE_WITHOUT_FINE_TUNE,
     TranscriptionResult,
     resolve_method,
@@ -930,7 +931,7 @@ def build_dataset_from_playlist(
         config,
         title=title,
         source=url,
-        language=language or "en",
+        language=language or UNKNOWN_LANGUAGE,
         source_platform="youtube",
         version=version,
         now=now,
@@ -981,7 +982,7 @@ def build_dataset_from_feed(
         config,
         title=feed.title,
         source=url,
-        language=language or "en",
+        language=language or UNKNOWN_LANGUAGE,
         source_platform="podcast",
         version=version,
         now=now,
