@@ -56,6 +56,11 @@ _LANG_SCRIPT = {
     "id": "latin", "vi": "latin",
     "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "sr": "cyrillic",
     "el": "greek", "he": "hebrew", "iw": "hebrew", "ar": "arabic", "fa": "arabic",
+    # Perso-Arabic script. Urdu especially needs this: Whisper auto-detects Urdu audio
+    # as Hindi (measured p=0.91 on a real podcast) and then emits Devanagari, so a whole
+    # dataset can come back in the wrong script while the card still says "ur". Without
+    # an entry here the script filter is disabled and nothing catches it.
+    "ur": "arabic", "ps": "arabic", "sd": "arabic",
     "hi": "devanagari", "mr": "devanagari",
     "zh": "cjk", "ja": "cjk", "ko": "cjk",
 }  # fmt: skip

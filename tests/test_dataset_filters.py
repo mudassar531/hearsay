@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hearsay.dataset.filters import detect_clipping_drops, filter_segments
+from hearsay.dataset.filters import _target_script, detect_clipping_drops, filter_segments
 from hearsay.dataset.models import DatasetClip, DatasetSegment, FilterConfig
 from hearsay.models import Word
 
@@ -212,3 +212,25 @@ def test_unset_target_language_keeps_non_latin_text() -> None:
         seg = _seg(words)
         kept, drops = filter_segments([("r", seg, 2.0)], FilterConfig())
         assert kept and not drops, f"{text!r} was dropped: {drops and drops[0].filter}"
+
+
+def test_perso_arabic_languages_have_a_target_script() -> None:
+    """Urdu, Pashto and Sindhi were unmapped, which silently disabled the script filter.
+
+    That matters most exactly where the risk is highest: Whisper auto-detects Urdu audio
+    as Hindi (measured p=0.91 on a real podcast) and then emits Devanagari, so a whole
+    dataset can come back in the wrong script while the card still reads "ur".
+    """
+    for code in ("ur", "ps", "sd", "ar", "fa"):
+        assert _target_script(code) == "arabic", code
+
+
+def test_devanagari_output_is_caught_for_an_urdu_dataset() -> None:
+    # The concrete failure: Urdu audio transcribed as Hindi.
+    words = _words(["यह", "जासूस", "है", "सारे", "पीने", "चाइनीज", "नहीं", "होते"])
+    assert _drop_reason(words, 3.0, target_language="ur") == "non_target_script"
+
+
+def test_real_urdu_passes_the_same_filter() -> None:
+    words = _words(["یہ", "جاسوس", "ہیں", "سارے", "پینے", "چائنیز", "نہیں", "ہوتے"])
+    assert _drop_reason(words, 3.0, target_language="ur") != "non_target_script"
