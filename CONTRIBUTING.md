@@ -75,3 +75,25 @@ uv run python scripts/export_schema.py
 Keep PRs focused, add tests for new behavior, and update `README.md` /
 `DECISIONS.md` when relevant. Conventional commit messages (`feat:`, `fix:`,
 `test:`, `docs:`, `chore:`) are appreciated.
+
+## Releasing
+
+Releases are published to PyPI by tag, using
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — there is no API token
+in the repo, on CI, or on anyone's laptop.
+
+One-time setup on PyPI (owner only): **Manage project → Publishing → Add a new
+publisher**, with owner `mudassar531`, repository `hearsay`, workflow
+`release.yml`, environment `pypi`.
+
+To cut a release:
+
+```bash
+# 1. bump the version in pyproject.toml and add a CHANGELOG entry, then merge to main
+# 2. tag it — the tag must match pyproject.toml or the workflow fails before uploading
+git tag v0.4.0 && git push origin v0.4.0
+```
+
+The workflow re-runs lint, types and tests, builds the wheel and sdist, installs the
+wheel into a clean environment and runs it, and only then publishes. PyPI never lets a
+version be reused, so every gate runs *before* the upload.

@@ -1,0 +1,78 @@
+name: Release
+
+# Publishing is driven by a version tag, so a release is always a deliberate act
+# with a commit behind it — never a side effect of a merge.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Check the tag matches the packaged version
+        # A tag that disagrees with pyproject.toml would publish a version nobody
+        # can find from the repo. PyPI never lets a version be reused, so this has
+        # to fail before the upload, not after.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          packaged="$(uv run --no-sync python -c 'import tomllib,pathlib;
+          print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$tag packaged=$packaged"
+          [ "$tag" = "$packaged" ] || { echo "::error::tag v$tag != pyproject version $packaged"; exit 1; }
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Test, lint and typecheck
+        # The same gate as CI: a tag must never ship something main would reject.
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy
+          uv run pytest
+
+      - name: Build
+        run: uv build
+
+      - name: Verify the wheel installs and runs
+        # Catches a packaging fault the test suite cannot see: the suite runs from
+        # the source tree, a user runs from the wheel.
+        run: |
+          uv venv /tmp/verify --python 3.12
+          VIRTUAL_ENV=/tmp/verify uv pip install dist/*.whl
+          /tmp/verify/bin/hearsay --version
+          /tmp/verify/bin/hearsay --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # PyPI Trusted Publishing mints a short-lived token from this OIDC identity,
+      # so no API token is ever stored in the repo or on a developer's machine.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
