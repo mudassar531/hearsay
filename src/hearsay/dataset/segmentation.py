@@ -202,8 +202,10 @@ def _prepare(
 
     Returns parallel arrays: repaired start/end (finite, non-negative, end>=start),
     forward inter-word gap (clamped >= 0 so overlaps/out-of-order timings never
-    produce a phantom negative pause), and blank/sentence/clause flags. The
-    original ``Word`` objects are left untouched.
+    produce a phantom negative pause), and blank/sentence/clause flags. A word whose
+    successor carries ``joins_left`` ends neither a sentence nor a clause: the
+    tokenizer has said the two are one unit. The original ``Word`` objects are left
+    untouched.
     """
     n = len(words)
     r_start = [0.0] * n
@@ -224,8 +226,13 @@ def _prepare(
         r_end[i] = e
         t = w.text.strip()
         if t:
-            sent[i] = _is_sentence_end(t)
-            clause[i] = _is_clause_end(t)
+            # ASR tokenizers split inside a word or a number — Whisper emits "19.8" as
+            # ["19.", "8"] — and mark the continuation with joins_left. A boundary in
+            # the middle of one token cannot end a sentence or a clause, however much
+            # the fragment looks like it does, so the cues are suppressed there.
+            continues = i + 1 < n and words[i + 1].joins_left
+            sent[i] = not continues and _is_sentence_end(t)
+            clause[i] = not continues and _is_clause_end(t)
         else:
             blank[i] = True
     gap_after = [0.0] * n
