@@ -113,7 +113,12 @@ def _format_option_errors(exc: ValidationError) -> str:
     return "Invalid option: " + "; ".join(lines) if lines else "Invalid option."
 
 
-_DEFAULT_MODEL = ModelSize(DEFAULT_MODEL)
+_DEFAULT_MODEL = DEFAULT_MODEL
+_MODEL_HELP = (
+    "auto (fastest available), parakeet, a whisper size (tiny…large-v3), or a "
+    "CTranslate2 Whisper model — a Hugging Face id like 'org/model-ct2' or a local path. "
+    "A community fine-tune is often the only usable option for a low-resource language."
+)
 _DEFAULT_OUTPUT_DIR = Path("./hearsay-out")
 _DEFAULT_DATASET_DIR = Path("./hearsay-dataset")
 
@@ -235,9 +240,7 @@ def dataset(
             "--lang", help="Target language (transcription + filter).", show_default=False
         ),
     ] = None,
-    model: Annotated[
-        ModelSize, typer.Option("--model", help="Transcription model.")
-    ] = _DEFAULT_MODEL,
+    model: Annotated[str, typer.Option("--model", help=_MODEL_HELP)] = _DEFAULT_MODEL,
     vad: Annotated[
         bool, typer.Option("--vad/--no-vad", help="Voice-activity filter (Whisper).")
     ] = True,
@@ -318,7 +321,7 @@ def dataset(
     except ValidationError as exc:
         _print_error(InvalidOptionError(_format_option_errors(exc), hint=_DATASET_OPTION_HINT))
         raise typer.Exit(code=1) from exc
-    m = model.value
+    m = model
     try:
         path = Path(source).expanduser()
         if path.is_file():
@@ -459,11 +462,8 @@ def ingest(
         ),
     ] = False,
     model: Annotated[
-        ModelSize,
-        typer.Option(
-            "--model",
-            help="Transcription model: auto (fastest available), parakeet, or a whisper size.",
-        ),
+        str,
+        typer.Option("--model", help=_MODEL_HELP),
     ] = _DEFAULT_MODEL,
     vad: Annotated[
         bool,
@@ -503,7 +503,7 @@ def ingest(
         output_dir=output_dir,
         language=language,
         transcribe=transcribe,
-        model=model.value,
+        model=model,
         vad=vad,
         write_json=write_json,
         latest=latest,

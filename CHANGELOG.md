@@ -4,6 +4,35 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 — 2026-08-26
+
+### Added
+
+- **Uzbek, and ~50 other low-resource languages, actually work.** `auto` used to open
+  `whisper-small` for anything Parakeet could not read. On Uzbek that returns romanised
+  approximations, and `medium` is worse still — it collapses into Khmer and Georgian
+  glyphs. Only `large-v3` returns readable Uzbek, so `auto` now opens it for the
+  languages where the smaller checkpoints do not merely lose accuracy but return the
+  wrong thing. A ~3 GB download, once, and only for those languages.
+- **`--model` accepts any CTranslate2 Whisper model** — a Hugging Face id or a local
+  path — not just the built-in sizes. This is what actually makes a low-resource
+  language usable: stock Whisper trained on *18 minutes* of Uzbek and scores ~90% WER on
+  its own FLEURS benchmark, while a community fine-tune reaches single digits. Measured
+  on the same Uzbek news clip: stock `large-v3` gives *"Iran xafsizli kushlariga
+  madxiya, sadıklar koshıqı"*; an Uzbek fine-tune gives *"eron xavfsizlik kuchlariga
+  madxiya, sodiqlar qo'shig'i"*. Word timestamps survive conversion, so dataset mode
+  slices normally.
+- **A warning when stock Whisper is pointed at a language it cannot read**, naming the
+  fix. Clips would otherwise ship paired with text that is largely wrong, and no
+  downstream filter can detect that.
+- **`prompt=` on `transcribe_audio`** for callers who want to steer spelling or
+  vocabulary. hearsay never sets one itself: seeding the decoder does pin the output
+  script (unprompted Uzbek measured 38% Latin / 61% Cyrillic in a single clip, versus
+  100% either way when seeded), but on audio the model cannot read, Whisper returns the
+  seed *as the transcript* — large-v3 on a 20s Uzbek clip echoed it back verbatim and
+  transcribed nothing. For a training set that is a clip paired with words nobody said.
+- The web UI language picker gained Kazakh, Mongolian and Serbian.
+
 ## 0.4.0 — 2026-08-26
 
 ### Security
