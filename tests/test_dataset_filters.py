@@ -234,3 +234,30 @@ def test_devanagari_output_is_caught_for_an_urdu_dataset() -> None:
 def test_real_urdu_passes_the_same_filter() -> None:
     words = _words(["یہ", "جاسوس", "ہیں", "سارے", "پینے", "چائنیز", "نہیں", "ہوتے"])
     assert _drop_reason(words, 3.0, target_language="ur") != "non_target_script"
+
+
+def test_bengali_has_a_target_script() -> None:
+    """Bengali audio that comes back in the wrong script must be caught.
+
+    Measured on a real Bengali news bulletin: `hearsay dataset <url>` with no flags
+    produced two clips whose text was Telugu script and English ("independent news
+    desk") — 0% Bengali — and shipped them under `language: "bn"` with zero
+    non_target_script drops, because `bn` had no entry in the script map and an
+    absent entry silently disables the filter.
+    """
+    assert _target_script("bn") == "bengali"
+    # Real Bengali passes.
+    assert _drop_reason(_words(["আমি", "আজকে"]), 2.0, target_language="bn") != "non_target_script"
+    # The Telugu and English that stock Whisper actually returned does not.
+    assert _drop_reason(_words(["వాపచేత", "జాడికందచకైరిి"]), 2.0, target_language="bn") == (
+        "non_target_script"
+    )
+    assert _drop_reason(_words(["independent", "news", "desk"]), 2.0, target_language="bn") == (
+        "non_target_script"
+    )
+
+
+def test_char_rate_still_skipped_for_space_free_scripts() -> None:
+    """Mapping Thai to a script must not switch on Latin-tuned speaking-rate bounds."""
+    assert _target_script("th") == "thai"
+    assert _drop_reason(_words(["สวัสดีครับ"]), 10.0, target_language="th") is None
