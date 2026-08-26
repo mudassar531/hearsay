@@ -305,3 +305,37 @@ def test_stale_hearsay_clips_are_still_cleaned_up(tmp_path: Path) -> None:
     stale.write_bytes(SAMPLE.read_bytes())
     build_combined_dataset([_source("a", "A")], _config(tmp_path), title="M", source="s")
     assert not stale.exists()
+
+
+def test_a_playlist_without_lang_is_not_labelled_english(tmp_path: Path) -> None:
+    """A Mandarin playlist used to ship a card claiming `language: "en"`.
+
+    `build_dataset_from_playlist`/`_from_feed` defaulted `language` to "en" when
+    `--lang` was omitted. Each source detects its own language for the filters, but
+    the combined card never saw it, so every playlist built without `--lang` asserted
+    English in its HuggingFace YAML front matter regardless of what was in the audio.
+    "und" (ISO 639-2 undetermined) is what hearsay already uses elsewhere for exactly
+    this, and unlike "en" it is not a false claim.
+    """
+    entries = [PlaylistEntry(video_id="vidA", title="Vid A", url="https://yt/a")]
+
+    def fake_transcribe(path, **kwargs):
+        return TranscriptionResult(
+            segments=[], language="zh", duration_s=4.71, model_size="x", method="x", words=_words()
+        )
+
+    report = build_dataset_from_playlist(
+        "https://yt/playlist",
+        config=_config(tmp_path),
+        playlist_fetcher=lambda url: ("普通话播放列表", entries),
+        metadata_fetcher=lambda url: {
+            "id": url.rsplit("/", 1)[-1],
+            "title": "t",
+            "duration": 4.71,
+            "channel": "C",
+        },
+        audio_downloader=lambda url, dest: SAMPLE,
+        transcriber=fake_transcribe,
+    )
+    assert report.language == "und"
+    assert 'language:\n- "und"' in (tmp_path / "dataset_card.md").read_text(encoding="utf-8")
