@@ -388,3 +388,32 @@ def test_auto_never_hands_an_unidentified_language_to_parakeet(
     """
     monkeypatch.setattr(transcribe, "_parakeet_available", lambda: True)
     assert transcribe._resolve_engine("auto", None)[0] == "whisper"
+
+
+def test_unusable_list_matches_whispers_own_fleurs_numbers() -> None:
+    """The list is only as good as the table it came from, and six were missing.
+
+    Whisper's paper (Table 13) reports these word error rates at large-v2, all at or
+    above the ~90% the list is defined by — i.e. worse than transcribing nothing:
+    Georgian 105.0, Bengali 104.1, Gujarati 102.7, Punjabi 102.4, Malayalam 100.7,
+    Telugu 99.0. Bengali is the one measured here: `hearsay dataset <bengali-url>`
+    returned Telugu script and English and said nothing.
+    """
+    for code in ("ka", "bn", "gu", "pa", "ml", "te"):
+        assert code in transcribe.UNUSABLE_WITHOUT_FINE_TUNE, code
+
+
+def test_auto_opens_the_large_model_for_hindi_and_bengali(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FLEURS `small` scores Hindi 38.4 and Bengali 104.4; large-v2 gives 21.5 and 104.1.
+
+    Both were resolving to `whisper-small` — Hindi loses nearly half its accuracy for
+    no reason, and Bengali gets the worse of two unusable checkpoints.
+    """
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    for code in ("hi", "bn"):
+        assert transcribe._resolve_engine("auto", code) == (
+            "whisper",
+            transcribe.LOW_RESOURCE_WHISPER,
+        ), code

@@ -53,6 +53,7 @@ NEEDS_LARGE_WHISPER = frozenset(
         "az",
         "ba",
         "be",
+        "bn",
         "bo",
         "br",
         "cy",
@@ -61,6 +62,7 @@ NEEDS_LARGE_WHISPER = frozenset(
         "gu",
         "ha",
         "haw",
+        "hi",
         "hy",
         "jw",
         "ka",
@@ -123,33 +125,44 @@ NEEDS_LARGE_WHISPER = frozenset(
 # back to Whisper: slower, but it can be forced to a language and its per-language error
 # rates are published. Add a language here once it has been checked on real audio.
 PARAKEET_LANGUAGES = frozenset(["de", "en", "it", "ru"])
-# Languages where even large-v3 is not usable, from Whisper's own FLEURS table: Uzbek
-# 90.2 and Pashto 93.7 word error at large-v2 — above 100% for the smaller sizes, i.e.
-# worse than transcribing nothing. Pashto is the starker case: it does not fail loudly
-# but transliterates into Arabic/Dari, so the text looks fluent and is the wrong
-# language. These need a fine-tune, and hearsay should say so. Kept deliberately narrow:
-# Urdu sits at 22.6 and Arabic at 16.0, which are ordinary error rates, not this.
+# Languages where even large-v3 is not usable. Word error rates in the comments are
+# Whisper's own, from its paper's FLEURS table (Table 13, large-v2 column); a rate near
+# or above 100 means worse than transcribing nothing. The bar is ~75 and up, which is
+# far beyond "inaccurate" — these do not fail loudly, they fail *fluently*: Pashto comes
+# back transliterated into Arabic/Dari, and Bengali came back as Telugu script and
+# English on a real news bulletin. Text like that reads fine and is the wrong language,
+# and no downstream filter can judge it, so hearsay has to say so up front.
+# A few entries are not in FLEURS at all and are listed on the same grounds Whisper
+# reports for them elsewhere: essentially no training data.
+# Kept deliberately narrow: Urdu sits at 22.6 and Arabic at 16.0, which are ordinary
+# error rates, not this.
 UNUSABLE_WITHOUT_FINE_TUNE = frozenset(
     [
-        "am",
-        "as",
-        "bo",
-        "km",
-        "ln",
-        "lo",
-        "mg",
-        "mn",
-        "my",
-        "ps",
-        "sd",
-        "si",
-        "sn",
-        "so",
-        "su",
-        "tg",
-        "tk",
-        "uz",
-        "yo",
+        "am",  # 140.3
+        "as",  # 106.2
+        "bn",  # 104.1 — and 104.4 at `small`, the size `auto` used to pick
+        "bo",  # not in FLEURS; ~no training data
+        "gu",  # 102.7
+        "ka",  # 105.0
+        "km",  # 99.7
+        "ln",  # 75.6
+        "lo",  # 101.5
+        "mg",  # not in FLEURS
+        "ml",  # 100.7
+        "mn",  # 110.5
+        "my",  # 115.7
+        "pa",  # 102.4
+        "ps",  # 93.7
+        "sd",  # 156.5
+        "si",  # not in FLEURS
+        "sn",  # 121.0
+        "so",  # 102.9
+        "su",  # not in FLEURS
+        "te",  # 99.0
+        "tg",  # 85.8
+        "tk",  # not in FLEURS
+        "uz",  # 90.2
+        "yo",  # 94.8
     ]
 )
 # Whisper size used purely to identify the language before picking an engine: the
