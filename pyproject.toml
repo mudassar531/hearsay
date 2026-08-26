@@ -1,6 +1,6 @@
 [project]
 name = "hearsay"
-version = "0.5.0"
+version = "0.5.1"
 description = "crawl4ai for video & audio — turn any YouTube video, podcast, or recording into clean timestamped LLM-ready markdown, or TTS/STT training datasets"
 readme = "README.md"
 authors = [
