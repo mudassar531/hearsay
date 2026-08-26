@@ -23,3 +23,7 @@ local.env
 # hearsay runtime output (users run it from the repo while developing)
 hearsay-out/
 *.tmp
+
+# coverage artifacts
+.coverage
+.coverage.*

@@ -88,7 +88,7 @@ def test_dataset_file_routes_and_passes_config(
 def test_dataset_youtube_video_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         build_mod,
-        "build_dataset_from_youtube",
+        "build_dataset_from_media_url",
         lambda url, *, config, **kw: _report(config.out_dir),
     )
     result = runner.invoke(
@@ -195,3 +195,32 @@ def test_dataset_error_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert "ffmpeg missing" in result.output
+
+
+def test_non_feed_url_builds_a_dataset_via_ytdlp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any yt-dlp-supported site builds a dataset, not just YouTube.
+
+    A Dailymotion/SoundCloud/Twitch URL is neither a feed nor a YouTube video id, so it
+    used to fall into the feed branch and die with an RSS complaint. Metadata and audio
+    both come from yt-dlp, which takes the URL verbatim — nothing was YouTube-specific
+    except the router.
+    """
+    from hearsay.errors import FeedError
+
+    def not_a_feed(url: str, **kwargs: object):
+        raise FeedError("no entries", hint="Point me at an RSS feed.")
+
+    seen: dict = {}
+
+    def fake_media_build(url: str, **kwargs: object):
+        seen["url"] = url
+        return _report(tmp_path)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(build_mod, "build_dataset_from_feed", not_a_feed)
+    monkeypatch.setattr(build_mod, "build_dataset_from_media_url", fake_media_build)
+    result = runner.invoke(app, ["dataset", "https://www.dailymotion.com/video/x8ougt8"])
+    assert result.exit_code == 0, result.output
+    assert seen["url"] == "https://www.dailymotion.com/video/x8ougt8"

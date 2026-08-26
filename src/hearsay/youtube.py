@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import ParseResult, parse_qs, urlparse
 
 from hearsay.errors import (
     AudioDownloadError,
@@ -18,14 +18,40 @@ from hearsay.errors import (
 )
 from hearsay.models import Chapter, SourceMetadata
 
-# A trailing negative lookahead rejects ids longer than 11 chars (which would
-# otherwise be silently truncated to a different, wrong video).
-_ID = r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
-_URL_PATTERNS = [
-    re.compile(rf"(?:youtube\.com|youtube-nocookie\.com)/watch\?(?:[^#\s]*&)?v={_ID}"),
-    re.compile(rf"youtu\.be/{_ID}"),
-    re.compile(rf"(?:youtube\.com|youtube-nocookie\.com)/(?:embed|shorts|live)/{_ID}"),
-]
+# A video id is exactly 11 chars; anything longer is a different video, not a prefix.
+_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+# Hosts whose URLs may be handed to yt-dlp. The id is located by *parsing* the URL and
+# matching this set against the real hostname — never by searching the string. A
+# substring search matches "youtu.be/<id>" anywhere, including in the path or query of
+# an attacker's URL ("http://169.254.169.254/#youtu.be/dQw4w9WgXcQ"), which would let a
+# caller aim server-side fetches at cloud metadata or internal hosts.
+_YOUTUBE_HOSTS = frozenset({"youtube.com", "youtube-nocookie.com"})
+_SHORT_HOSTS = frozenset({"youtu.be"})
+# /embed/<id>, /shorts/<id>, /live/<id> — the id is the second path segment.
+_PATH_PREFIXES = frozenset({"embed", "shorts", "live"})
+
+
+def _canonical_host(url: str) -> tuple[str, ParseResult] | None:
+    """Parse ``url`` and return its ``(bare_host, parsed)``, or None if it isn't http(s).
+
+    Strips a leading ``www.``/``m.`` so mobile and canonical links compare equal.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:  # malformed IPv6 literal, etc.
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    for prefix in ("www.", "m."):
+        host = host.removeprefix(prefix)
+    return host, parsed
+
+
+def _valid_id(candidate: str) -> str | None:
+    return candidate if _ID.match(candidate) else None
+
 
 _METADATA_TIMEOUT_S = 60
 _DOWNLOAD_TIMEOUT_S = 600
@@ -43,11 +69,27 @@ class PlaylistEntry(NamedTuple):
 
 
 def extract_video_id(url: str) -> str | None:
-    """Return the 11-character video id from a YouTube URL, or None if it isn't one."""
-    for pattern in _URL_PATTERNS:
-        match = pattern.search(url)
-        if match:
-            return match.group(1)
+    """Return the 11-character video id from a YouTube URL, or None if it isn't one.
+
+    The hostname is parsed and matched exactly (modulo ``www.``/``m.``), so a URL that
+    merely *contains* a YouTube-looking substring is rejected — this function is the
+    gate that decides whether a caller-supplied URL gets fetched server-side.
+    """
+    resolved = _canonical_host(url)
+    if resolved is None:
+        return None
+    host, parsed = resolved
+    segments = [s for s in parsed.path.split("/") if s]
+    if host in _SHORT_HOSTS:
+        # youtu.be/<id>
+        return _valid_id(segments[0]) if len(segments) == 1 else None
+    if host not in _YOUTUBE_HOSTS:
+        return None
+    if len(segments) == 1 and segments[0] == "watch":
+        values = parse_qs(parsed.query).get("v") or []
+        return _valid_id(values[0]) if values else None
+    if len(segments) == 2 and segments[0] in _PATH_PREFIXES:
+        return _valid_id(segments[1])
     return None
 
 

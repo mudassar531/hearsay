@@ -114,19 +114,53 @@ def test_ingest_respects_output_flag(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert dest.exists()
 
 
-def test_non_feed_url_is_friendly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A non-YouTube http URL is tried as a podcast feed; a non-feed fails cleanly.
+def test_non_feed_url_falls_back_to_transcription(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-feed http URL is a media page, not an error.
+
+    Only fetching distinguishes a podcast feed from a video page, so a FeedError means
+    "not a feed" — hand it to yt-dlp, which supports ~1800 sites. Before this, every
+    non-YouTube video URL died with an RSS complaint.
+    """
     from hearsay.errors import FeedError
 
     def not_a_feed(url: str):
         raise FeedError(f"No podcast episodes found at {url}.", hint="Point me at an RSS feed.")
 
+    seen: dict = {}
+
+    def fake_transcribe(url: str, **kwargs: object):
+        seen["url"] = url
+        return _whisper_doc("Sonda wyborcza")
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "fetch_feed", not_a_feed)
+    monkeypatch.setattr(cli, "ingest_youtube_transcribe", fake_transcribe)
+    result = runner.invoke(app, ["https://www.dailymotion.com/video/x8ougt8"])
+    assert result.exit_code == 0, result.output
+    assert seen["url"] == "https://www.dailymotion.com/video/x8ougt8"
+    assert (tmp_path / "x8ougt8.md").exists()
+
+
+def test_unreachable_url_still_fails_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hearsay.errors import FeedError, MetadataError
+
+    def not_a_feed(url: str):
+        raise FeedError("no entries", hint="Point me at an RSS feed.")
+
+    def no_such_video(url: str, **kwargs: object):
+        raise MetadataError(f"yt-dlp failed for {url}: Unsupported URL", hint="Check the link.")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "fetch_feed", not_a_feed)
+    monkeypatch.setattr(cli, "ingest_youtube_transcribe", no_such_video)
     result = runner.invoke(app, ["https://example.com/not-a-video"])
     assert result.exit_code == 1
     assert "Traceback" not in result.output
-    assert "RSS" in result.output or "feed" in result.output.lower()
+    assert "Unsupported URL" in result.output
     assert not list(tmp_path.glob("*.md"))
 
 
@@ -376,7 +410,9 @@ def test_playlist_batch_continues_past_failure(
     result = runner.invoke(
         app, ["https://www.youtube.com/playlist?list=PLabc", "--all", "--output-dir", str(out)]
     )
-    assert result.exit_code == 0, result.output
+    # A partial batch still writes everything that worked, but exits 1 so a script or
+    # CI job can see that work was lost (2 would mean nothing succeeded at all).
+    assert result.exit_code == 1, result.output
     assert len(list(out.glob("*.md"))) == 2  # two succeeded, one failed but did not abort
     assert "1 failed" in result.output or "private" in result.output
 
@@ -431,3 +467,36 @@ def test_feed_colliding_titles_do_not_overwrite(
     result = runner.invoke(app, ["https://example.com/feed.xml", "--all", "--output-dir", str(out)])
     assert result.exit_code == 0, result.output
     assert len(list(out.glob("*.md"))) == 2  # no silent overwrite
+
+
+def test_batch_exit_code_is_2_when_every_item_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch where nothing worked used to exit 0 — indistinguishable from success."""
+    monkeypatch.setattr(cli, "fetch_playlist", lambda url: ("PL", _entries(2)))
+
+    def always_fails(url, **kwargs):
+        from hearsay.errors import VideoUnavailableError
+
+        raise VideoUnavailableError("private", hint="...")
+
+    monkeypatch.setattr(cli, "ingest_youtube", always_fails)
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app, ["https://www.youtube.com/playlist?list=PLabc", "--all", "--output-dir", str(out)]
+    )
+    assert result.exit_code == 2, result.output
+    assert list(out.glob("*.md")) == []
+
+
+def test_batch_exit_code_is_0_when_everything_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "fetch_playlist", lambda url: ("PL", _entries(2)))
+    monkeypatch.setattr(cli, "ingest_youtube", lambda url, **kw: _fixture_document("rStL7niR7gs"))
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app, ["https://www.youtube.com/playlist?list=PLabc", "--all", "--output-dir", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(list(out.glob("*.md"))) == 2

@@ -18,6 +18,10 @@ def _seg(words: list[Word], oversized: bool = False) -> DatasetSegment:
 
 
 def _drop_reason(words: list[Word], duration_s: float, **cfg) -> str | None:
+    # These cases are all about an English target, so name it: FilterConfig now
+    # defaults target_language to None ("follow the source's detected language"),
+    # which deliberately disables the script and char-rate filters.
+    cfg.setdefault("target_language", "en")
     seg = _seg(words)
     kept, drops = filter_segments([("ref_0001", seg, duration_s)], FilterConfig(**cfg))
     if drops:
@@ -65,7 +69,7 @@ def test_internal_silence_dropped() -> None:
 
 
 def test_non_target_script_dropped() -> None:
-    words = _words(["你好", "世界", "今天", "天气"])  # CJK, target default "en"
+    words = _words(["你好", "世界", "今天", "天气"])  # CJK against an English target
     assert _drop_reason(words, 2.0) == "non_target_script"
 
 
@@ -195,3 +199,16 @@ def test_clipping_off_by_default(tmp_path: Path) -> None:
     )
     kept, drops = detect_clipping_drops([clip], tmp_path, FilterConfig())  # detect_clipping=False
     assert kept == [clip] and drops == []
+
+
+# --- language defaulting ---------------------------------------------------
+
+
+def test_unset_target_language_keeps_non_latin_text() -> None:
+    # target_language=None means "follow the source", so the script filter must not
+    # judge Urdu/Chinese/Russian audio against English and drop all of it.
+    for text in ("你好 世界 今天 天气", "میں آج بازار جا رہا", "я иду сегодня на рынок"):
+        words = _words(text.split())
+        seg = _seg(words)
+        kept, drops = filter_segments([("r", seg, 2.0)], FilterConfig())
+        assert kept and not drops, f"{text!r} was dropped: {drops and drops[0].filter}"

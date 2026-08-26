@@ -273,3 +273,35 @@ def test_empty_playlist_yields_empty_dataset(tmp_path: Path) -> None:
     assert report.succeeded == 0 and report.clip_count == 0
     assert _manifest(tmp_path) == []
     assert "0 source(s)" in (tmp_path / "dataset_card.md").read_text(encoding="utf-8")
+
+
+def test_user_owned_wavs_in_the_output_dir_are_never_deleted(tmp_path: Path) -> None:
+    """--out may point at a folder that already holds the user's own recordings.
+
+    Reconciliation used to sweep every unreferenced WAV under <out>/wavs/, which
+    silently destroyed them. Only hearsay's own "<source_id>_NNNN.wav" clips are
+    eligible for cleanup.
+    """
+    wavs = tmp_path / "wavs"
+    wavs.mkdir(parents=True)
+    mine = wavs / "my_precious_recording.wav"
+    also_mine = wavs / "session-2024-05-01.wav"
+    for path in (mine, also_mine):
+        path.write_bytes(SAMPLE.read_bytes())
+
+    build_combined_dataset([_source("a", "A")], _config(tmp_path), title="M", source="s")
+
+    assert mine.exists() and also_mine.exists()
+    # hearsay's own clips are still written and still reconciled against the manifest.
+    owned = {n for n in _wav_names(tmp_path) if n.startswith("a_")}
+    assert owned and owned == {n for n in _manifest_wav_names(tmp_path) if n.startswith("a_")}
+
+
+def test_stale_hearsay_clips_are_still_cleaned_up(tmp_path: Path) -> None:
+    # The protection above must not stop hearsay from removing its own stale output.
+    wavs = tmp_path / "wavs"
+    wavs.mkdir(parents=True)
+    stale = wavs / "a_9999.wav"
+    stale.write_bytes(SAMPLE.read_bytes())
+    build_combined_dataset([_source("a", "A")], _config(tmp_path), title="M", source="s")
+    assert not stale.exists()

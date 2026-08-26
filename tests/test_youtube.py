@@ -33,6 +33,8 @@ def load_meta(video_id: str) -> dict:
         ("https://www.youtube.com/embed/rStL7niR7gs", "rStL7niR7gs"),
         ("https://www.youtube.com/live/rStL7niR7gs", "rStL7niR7gs"),
         ("https://www.youtube-nocookie.com/embed/rStL7niR7gs", "rStL7niR7gs"),
+        ("https://m.youtube.com/watch?v=rStL7niR7gs", "rStL7niR7gs"),  # mobile host
+        ("https://YouTube.com/watch?v=rStL7niR7gs", "rStL7niR7gs"),  # host is caseless
     ],
 )
 def test_extract_video_id(url: str, expected: str) -> None:
@@ -47,6 +49,17 @@ def test_extract_video_id(url: str, expected: str) -> None:
         "not a url at all",
         "zjkBMFhNj_g",  # a bare id is not a URL
         "https://youtu.be/tooshort",
+        # SSRF: the id must be located by parsing the host, never by searching the
+        # string — a URL that merely CONTAINS a YouTube-looking substring must not be
+        # accepted, because accepting it hands that URL to yt-dlp to fetch.
+        "http://169.254.169.254/latest/meta-data/#youtu.be/dQw4w9WgXcQ",
+        "http://127.0.0.1:8756/youtu.be/dQw4w9WgXcQ",
+        "http://attacker.example.com/youtu.be/dQw4w9WgXcQ",
+        "http://internal.corp/secret?x=youtu.be/dQw4w9WgXcQ",
+        "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+        "https://youtube.com.evil.net/watch?v=dQw4w9WgXcQ",
+        "file:///etc/passwd#youtu.be/dQw4w9WgXcQ",
+        "https://youtu.be/dQw4w9WgXcQ/extra",
         "https://www.youtube.com/watch?v=dQw4w9WgXcQextra",  # 11+ chars: reject, don't truncate
         "",
     ],

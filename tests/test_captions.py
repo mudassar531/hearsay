@@ -3,6 +3,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from hearsay import captions
 from hearsay.captions import TranscriptInfo, normalize_snippets, select_transcript
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -106,3 +109,21 @@ def test_normalize_real_fixtures_yields_clean_ordered_segments() -> None:
             assert segment.text == segment.text.strip()
             assert "\n" not in segment.text
             assert segment.end_s >= segment.start_s
+
+
+def test_captions_session_applies_a_default_timeout() -> None:
+    """requests has no default timeout, so a stalled YouTube connection would hang
+    hearsay indefinitely on its fastest, most common path."""
+    session = captions._TimeoutSession()
+    seen: dict = {}
+
+    class _Adapter:
+        def send(self, request: object, **kwargs: object) -> object:
+            seen.update(kwargs)
+            raise RuntimeError("stop before the network")
+
+    session.adapters.clear()
+    session.mount("http://", _Adapter())  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError):
+        session.get("http://example.invalid")
+    assert seen.get("timeout") == captions._CAPTIONS_TIMEOUT_S

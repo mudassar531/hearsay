@@ -123,6 +123,88 @@ def test_file_endpoint_dispatches(server: str, monkeypatch: pytest.MonkeyPatch) 
     assert seen["model_size"] == "tiny"
 
 
-def test_process_url_rejects_non_youtube() -> None:
+def test_process_url_accepts_other_platforms(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Non-YouTube sites have no caption API, so they go straight to transcription
+    # rather than being rejected — yt-dlp supports ~1800 of them.
+    seen: dict = {}
+
+    def fake_transcribe(url: str, **kwargs: object) -> Document:
+        seen["url"] = url
+        return _doc("Sonda wyborcza", "whisper-small")
+
+    monkeypatch.setattr(webui, "ingest_youtube_transcribe", fake_transcribe)
+    doc = webui.process_url("https://www.dailymotion.com/video/x8ougt8")
+    assert doc.meta.title == "Sonda wyborcza"
+    assert seen["url"] == "https://www.dailymotion.com/video/x8ougt8"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://127.0.0.1:8756/",  # the hearsay server itself
+        "http://192.168.1.1/admin",  # a LAN device
+        "file:///etc/passwd",  # not fetchable at all
+        "",
+    ],
+)
+def test_process_url_refuses_to_reach_inside_the_network(url: str) -> None:
+    """The UI hands URLs to yt-dlp, which fetches them server-side — a trust boundary.
+
+    Without this the page could be used as a proxy into the user's own network.
+    """
     with pytest.raises(InvalidSourceError):
-        webui.process_url("https://example.com/not-a-video")
+        webui.process_url(url)
+
+
+# --- Host-header validation (DNS-rebinding defence) ------------------------
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["localhost", "localhost:8756", "127.0.0.1", "127.0.0.1:8756", "[::1]:8756"],
+)
+def test_host_allowed_accepts_loopback(host: str) -> None:
+    assert webui._host_allowed(host, "127.0.0.1")
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["evil.example.com", "evil.example.com:8756", "attacker.test", "", "   "],
+)
+def test_host_allowed_rejects_foreign_names(host: str) -> None:
+    assert not webui._host_allowed(host, "127.0.0.1")
+
+
+def test_host_allowed_lan_bind_accepts_ip_literals_only() -> None:
+    # --host 0.0.0.0 is an explicit "serve my LAN": a raw address cannot be rebound,
+    # but a hostname can, so names stay rejected even there.
+    assert webui._host_allowed("192.168.1.20:8756", "0.0.0.0")
+    assert not webui._host_allowed("rebind.example.com:8756", "0.0.0.0")
+
+
+def test_foreign_host_get_is_refused(server: str) -> None:
+    # A page on the public internet that rebinds its name to 127.0.0.1 still sends
+    # its own hostname in Host — that request must not reach the UI.
+    conn = http.client.HTTPConnection(server, timeout=5)
+    conn.request("GET", "/", headers={"Host": "evil.example.com"})
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+    assert resp.status == 403
+    assert b"<title>hearsay</title>" not in body
+
+
+def test_foreign_host_post_is_refused(server: str) -> None:
+    conn = http.client.HTTPConnection(server, timeout=5)
+    conn.request(
+        "POST",
+        "/api/url",
+        body=json.dumps({"url": "https://youtu.be/abc"}).encode(),
+        headers={"Content-Type": "application/json", "Host": "evil.example.com"},
+    )
+    resp = conn.getresponse()
+    data = json.loads(resp.read())
+    conn.close()
+    assert resp.status == 403
+    assert data["ok"] is False

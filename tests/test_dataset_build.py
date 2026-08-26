@@ -11,7 +11,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+import hearsay.dataset.build as ds_build
 from hearsay.dataset.build import build_dataset, build_dataset_from_file
 from hearsay.dataset.models import DatasetConfig, FilterConfig
 from hearsay.errors import AudioExportError, InvalidSourceError
@@ -240,3 +242,152 @@ def test_build_from_file_with_tiny_model(tmp_path: Path) -> None:
     assert "fox" in all_text and "dog" in all_text
     for clip in report.clips:
         assert (tmp_path / clip.audio_path).exists()
+
+
+def test_config_rejects_inverted_segment_bounds() -> None:
+    # Each bound is individually valid, so without a cross-field check the build runs
+    # to completion and emits a near-empty dataset — a bad flag must fail fast instead.
+    DatasetConfig(out_dir=Path("x"), segment_min_s=1.0, segment_max_s=15.0)  # valid
+    with pytest.raises(ValidationError, match="--segment-min"):
+        DatasetConfig(out_dir=Path("x"), segment_min_s=20.0, segment_max_s=5.0)
+
+
+def test_config_allows_equal_segment_bounds() -> None:
+    # A fixed clip length is a legitimate request, not an inverted window.
+    cfg = DatasetConfig(out_dir=Path("x"), segment_min_s=5.0, segment_max_s=5.0)
+    assert cfg.segment_min_s == cfg.segment_max_s == 5.0
+
+
+# --- word-alignment warning ------------------------------------------------
+
+
+def _warning_config(tmp_path: Path) -> DatasetConfig:
+    return DatasetConfig(out_dir=tmp_path, sample_rate=16000, filters=FilterConfig(enabled=False))
+
+
+@pytest.mark.parametrize("method", ["whisper-tiny", "whisper-base"])
+def test_small_models_warn_about_word_alignment(tmp_path: Path, method: str) -> None:
+    # tiny/base can omit an audible word from a clip's transcript, which is silent
+    # audio/text misalignment — no downstream filter can see it, so it must be said.
+    report = build_dataset(
+        SAMPLE,
+        _synthetic_words(),
+        _meta(),
+        config=_warning_config(tmp_path),
+        transcription_method=method,
+    )
+    assert any("word alignment" in w for w in report.warnings)
+    assert any(method in w for w in report.warnings)
+
+
+@pytest.mark.parametrize("method", ["whisper-small", "whisper-large-v3", "parakeet-tdt-0.6b-v3"])
+def test_capable_models_do_not_warn(tmp_path: Path, method: str) -> None:
+    report = build_dataset(
+        SAMPLE,
+        _synthetic_words(),
+        _meta(),
+        config=_warning_config(tmp_path),
+        transcription_method=method,
+    )
+    assert not any("word alignment" in w for w in report.warnings)
+
+
+def test_alignment_warning_absent_when_method_unknown(tmp_path: Path) -> None:
+    # Callers that don't report a method (older/injected paths) must not be warned at.
+    report = build_dataset(SAMPLE, _synthetic_words(), _meta(), config=_warning_config(tmp_path))
+    assert not any("word alignment" in w for w in report.warnings)
+
+
+def test_segment_bounds_flow_into_the_duration_filter() -> None:
+    # The segmenter cuts to the user's window, then the filter re-checks the result.
+    # Left at their standalone defaults the filter rejected everything the segmenter
+    # produced, so `--segment-max 30` reported "0 clips" under a green success tick.
+    cfg = DatasetConfig(out_dir=Path("x"), segment_min_s=16.0, segment_max_s=30.0)
+    assert cfg.filters.min_duration_s == 16.0
+    assert cfg.filters.max_duration_s == 30.0
+
+
+def test_explicit_filter_bounds_are_not_overridden() -> None:
+    # A caller who sets filter bounds deliberately keeps them.
+    cfg = DatasetConfig(
+        out_dir=Path("x"),
+        segment_min_s=16.0,
+        segment_max_s=30.0,
+        filters=FilterConfig(min_duration_s=2.0, max_duration_s=25.0),
+    )
+    assert cfg.filters.min_duration_s == 2.0
+    assert cfg.filters.max_duration_s == 25.0
+
+
+def test_widened_segment_window_actually_yields_clips(tmp_path: Path) -> None:
+    # End-to-end guard for the same trap, with the quality filters ON.
+    config = DatasetConfig(out_dir=tmp_path, segment_min_s=3.0, segment_max_s=30.0)
+    report = build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
+    assert report.clip_count >= 1
+    assert not any(d.filter == "duration" for d in report.drops)
+
+
+def test_hf_and_ljspeech_together_warn(tmp_path: Path) -> None:
+    # Verified against datasets 4.x: both indexes in one tree raises
+    # "Found metadata files with different extensions: ['.csv', '.jsonl']",
+    # so the HuggingFace index the user asked for is unloadable.
+    config = DatasetConfig(out_dir=tmp_path, formats=["ljspeech", "hf"])
+    report = build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
+    assert any("cannot share a dataset folder" in w for w in report.warnings)
+
+
+def test_hf_alone_does_not_warn(tmp_path: Path) -> None:
+    config = DatasetConfig(out_dir=tmp_path, formats=["hf", "jsonl"])
+    report = build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
+    assert not any("cannot share a dataset folder" in w for w in report.warnings)
+
+
+def test_one_bad_slice_does_not_discard_the_whole_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable stretch of a long recording must cost one clip, not all of them."""
+    real_slice = ds_build.slice_clip
+    calls = {"n": 0}
+
+    def flaky_slice(*args: object, **kwargs: object) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise AudioExportError("ffmpeg could not slice clip", hint="…")
+        real_slice(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ds_build, "slice_clip", flaky_slice)
+    config = DatasetConfig(
+        out_dir=tmp_path,
+        sample_rate=16000,
+        segment_min_s=1.0,
+        segment_max_s=2.0,
+        filters=_NO_FILTER,
+    )
+    report = build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)
+
+    assert calls["n"] >= 2, "fixture must produce enough clips to hit the failing one"
+    assert report.clip_count >= 1
+    assert any(d.filter == "slice_failed" for d in report.drops)
+    # ids stay dense: the failed clip did not leave a hole in the numbering
+    assert [c.id for c in report.clips] == [
+        f"sample_{i:04d}" for i in range(1, report.clip_count + 1)
+    ]
+
+
+def test_a_thoroughly_broken_source_still_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Tolerating every failure would ship a silently decimated dataset.
+    def always_fails(*args: object, **kwargs: object) -> None:
+        raise AudioExportError("ffmpeg could not slice clip", hint="…")
+
+    monkeypatch.setattr(ds_build, "slice_clip", always_fails)
+    config = DatasetConfig(
+        out_dir=tmp_path,
+        sample_rate=16000,
+        segment_min_s=0.3,
+        segment_max_s=0.6,
+        filters=_NO_FILTER,
+    )
+    with pytest.raises(AudioExportError):
+        build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config)

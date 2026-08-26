@@ -1,15 +1,22 @@
 """Tests for optional diarization — pure assignment, modes, and clean degrade (offline).
 
-The real pyannote backend is not installed in the test env (it's a heavy, gated extra),
-so a fake diarizer (a list of speaker turns) exercises the per-speaker / dominant /
-cross-speaker logic; the not-installed path is tested for real.
+A fake diarizer (a list of speaker turns) exercises the per-speaker / dominant /
+cross-speaker logic. The "extra not installed" path is exercised through the
+``no_pyannote`` fixture, which makes the import fail on demand rather than relying on
+pyannote being absent from the environment — installing the documented ``[diarize]``
+extra must not turn these into failures (and, once installed, it would otherwise reach
+for a gated model over the network).
 """
 
 import json
+import subprocess
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from hearsay.dataset.audio import decode_to_wav
 from hearsay.dataset.build import (
     DatasetSource,
     _produce_clips,
@@ -29,6 +36,20 @@ from hearsay.models import SourceMetadata, Word
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE = FIXTURES / "sample.wav"  # ~4.71s
+
+
+@pytest.fixture
+def no_pyannote(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Make ``pyannote.audio`` unimportable for the duration of a test.
+
+    ``None`` in ``sys.modules`` is the documented way to force a failed import: the
+    import machinery raises ImportError, and ``find_spec`` raises ValueError — the two
+    signals hearsay treats as "the extra isn't installed".
+    """
+    for name in ("pyannote", "pyannote.audio"):
+        monkeypatch.setitem(sys.modules, name, None)
+    yield
+
 
 # Two speakers: SPEAKER_00 owns [0, 2.5], SPEAKER_01 owns [2.5, 4.5].
 _TURNS = [SpeakerTurn("SPEAKER_00", 0.0, 2.5), SpeakerTurn("SPEAKER_01", 2.5, 4.5)]
@@ -72,9 +93,9 @@ def test_resolve_token(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolve_token(DiarizeConfig()) == "legacy"
 
 
-def test_pyannote_not_installed_raises_friendly_error() -> None:
-    # pyannote.audio is not in the test env; the first call must raise a clear,
-    # actionable DiarizationError (not a bare ImportError).
+def test_pyannote_not_installed_raises_friendly_error(no_pyannote: None) -> None:
+    # With the extra unavailable, the first call must raise a clear, actionable
+    # DiarizationError (not a bare ImportError).
     diarizer = PyannoteDiarizer(DiarizeConfig())
     with pytest.raises(DiarizationError) as excinfo:
         diarizer(SAMPLE)
@@ -236,7 +257,7 @@ def test_cross_speaker_clip_dropped(tmp_path: Path) -> None:
     assert list((tmp_path / "wavs").glob("*.wav")) == []  # cross-speaker WAV removed
 
 
-def test_degrades_to_mixed_speaker_when_not_installed(tmp_path: Path) -> None:
+def test_degrades_to_mixed_speaker_when_not_installed(tmp_path: Path, no_pyannote: None) -> None:
     # diarize requested, no diarizer injected, pyannote not installed -> mixed-speaker
     # dataset with a clear warning (never a crash).
     report = build_dataset(
@@ -279,3 +300,65 @@ def test_combined_per_speaker_namespaced_across_sources(tmp_path: Path) -> None:
     assert speakers == {"vidA:SPEAKER_00", "vidB:SPEAKER_00"}  # not merged
     assert (tmp_path / "manifest.vidA-SPEAKER_00.jsonl").exists()
     assert (tmp_path / "manifest.vidB-SPEAKER_00.jsonl").exists()
+
+
+# --- the backend always diarizes decoded PCM, never the original container ----
+
+
+class _FakePipeline:
+    """Stand-in pyannote pipeline that records the path it was handed."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def __call__(self, path: str, **kwargs: object) -> _Annotation:
+        self.seen.append(path)
+        return _Annotation([("SPEAKER_00", 0.0, 1.0)])
+
+
+def test_diarizer_decodes_compressed_source_to_wav(tmp_path: Path) -> None:
+    """A compressed source must be decoded before it reaches pyannote.
+
+    pyannote 4.x reads fixed windows sized from the reported duration; an MP3/M4A
+    decodes to a frame-quantized sample count that can fall short of the last window,
+    which it raises on ("resulted in N samples instead of the expected M"). Since every
+    podcast enclosure is an MP3, handing it the raw path broke the headline
+    podcast -> single-voice-TTS build outright.
+    """
+    mp3 = tmp_path / "episode.mp3"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(SAMPLE), str(mp3)],
+        check=True,
+    )
+    diarizer = PyannoteDiarizer(DiarizeConfig())
+    fake = _FakePipeline()
+    diarizer._pipeline = fake
+
+    turns = diarizer(mp3)
+
+    assert turns == [SpeakerTurn("SPEAKER_00", 0.0, 1.0)]
+    assert len(fake.seen) == 1
+    assert fake.seen[0].endswith(".wav"), "pyannote must receive decoded PCM, not the .mp3"
+    assert not Path(fake.seen[0]).exists(), "the decoded scratch file is cleaned up"
+
+
+def test_decode_to_wav_produces_mono_16k_pcm(tmp_path: Path) -> None:
+    out = decode_to_wav(SAMPLE, tmp_path / "out.wav")
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert probe.stdout.strip() == "pcm_s16le,16000,1"

@@ -14,8 +14,10 @@ the agent host's server config):
 """
 
 import os
+from functools import partial
 from pathlib import Path
 
+from hearsay import __version__
 from hearsay.errors import HearsayError, NoCaptionsError
 from hearsay.pipeline import ingest_file as _ingest_file
 from hearsay.pipeline import ingest_youtube, ingest_youtube_transcribe
@@ -68,6 +70,7 @@ def build_server():
     hint if the extra is not installed.
     """
     try:
+        import anyio.to_thread
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
         raise HearsayError(
@@ -76,9 +79,18 @@ def build_server():
         ) from exc
 
     server = FastMCP("hearsay")
+    # FastMCP doesn't take a version and leaves the low-level server reporting the MCP
+    # SDK's own version, so every client's serverInfo showed the SDK release instead of
+    # hearsay's — useless for telling which hearsay an agent is actually talking to.
+    server._mcp_server.version = __version__
 
+    # Both tools are long, blocking, CPU-bound work (a model decode plus yt-dlp/ffmpeg
+    # subprocesses) — minutes for a full episode. FastMCP calls a *sync* tool directly
+    # on the event loop, which would stall the whole stdio session for the duration:
+    # no other tool call, no keepalive, no cancellation until it returns. Running them
+    # in a worker thread keeps the server answering while a transcription proceeds.
     @server.tool()
-    def ingest_url(url: str, transcribe: bool = False, lang: str | None = None) -> str:
+    async def ingest_url(url: str, transcribe: bool = False, lang: str | None = None) -> str:
         """Ingest a YouTube video URL into clean, timestamped, LLM-ready markdown.
 
         Args:
@@ -87,19 +99,21 @@ def build_server():
             lang: Preferred language code (captions default to English).
         """
         try:
-            return ingest_url_markdown(url, transcribe=transcribe, lang=lang)
+            return await anyio.to_thread.run_sync(
+                partial(ingest_url_markdown, url, transcribe=transcribe, lang=lang)
+            )
         except HearsayError as exc:
             raise ValueError(_format_error(exc)) from exc
 
     @server.tool()
-    def ingest_file(path: str) -> str:
+    async def ingest_file(path: str) -> str:
         """Transcribe a local audio/video file into clean, timestamped markdown.
 
         Args:
             path: Path to a local audio or video file.
         """
         try:
-            return ingest_file_markdown(path)
+            return await anyio.to_thread.run_sync(partial(ingest_file_markdown, path))
         except HearsayError as exc:
             raise ValueError(_format_error(exc)) from exc
 
