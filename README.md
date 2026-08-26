@@ -137,10 +137,17 @@ voice-data/
   (faster-whisper `word_timestamps`, or Parakeet on Apple Silicon), padded a little
   on each edge (`--pad`) and given a short fade so boundaries never click or clip a
   phoneme.
-- **Pick a model that can align.** `auto` (Parakeet on Apple Silicon, else
-  `whisper-small`) is right for training data. `--model tiny`/`base` are fine for
-  *reading* a transcript but their word-alignment pass can omit an audible word,
-  pairing a clip with text that is missing it — hearsay warns when you use one.
+- **Pick a model that can align.** `--model tiny`/`base` are fine for *reading* a
+  transcript but their word-alignment pass can omit an audible word, pairing a clip
+  with text that is missing it — hearsay warns when you use one.
+- **Parakeet is fast, and it is not multilingual in the way its model card says.**
+  Measured on real YouTube audio: Spanish and French come back as fluent **English**
+  (a Spanish podcast returned 0 Spanish function words and 89 English ones, scoring
+  0.02 character similarity against `large-v3` on the same audio); German, Italian
+  and Russian were correct. `parakeet-mlx` takes no language argument, so `--lang`
+  cannot steer it — it only relabels the output, which stamps English text with
+  `language: "es"` on the card. `auto` therefore hands Parakeet only the languages
+  that have been checked on real audio, and everything else goes to Whisper.
 - **Language is detected, not assumed.** The script and speaking-rate filters follow
   the language transcription detected, so non-English and non-Latin sources build
   normally; pass `--lang` only to force one.
@@ -161,12 +168,24 @@ voice-data/
 
   **Which languages need one?** Whisper's own FLEURS word-error rates, from its paper:
 
-  | language | stock large-v3 | what to run |
+  | language | stock Whisper (FLEURS, large-v2) | what to run |
   | --- | --- | --- |
+  | Spanish `es`, Russian `ru`, Japanese `ja` | 3.0 / 5.6 / 5.3 — excellent | `--lang es` (any size) |
+  | Turkish `tr`, Vietnamese `vi` | 8.4 / 10.3 — fine | `--lang tr` |
+  | Chinese `zh`, Korean `ko` | 14.7 / 14.3 — fine | `--lang zh` |
   | Arabic `ar` | ~16% — fine | `--lang ar` |
-  | Urdu `ur` | usable | `--lang ur` — **always pass it**, or Whisper detects Hindi and returns Devanagari |
+  | Hindi `hi` | 21.5 large, **38.4 at `small`** | `--lang hi` — `auto` now opens `large-v3` |
+  | Urdu `ur` | 22.6 — usable | `--lang ur` — **always pass it**, or Whisper detects Hindi and returns Devanagari |
+  | Swahili `sw` | 39.3 — poor but real Swahili | `--lang sw`, and expect to clean the text |
   | Uzbek `uz` | ~90% — unusable | `--lang uz --model <an Uzbek CT2 fine-tune>` |
   | Pashto `ps` | ~93% — unusable | `--lang ps --model <a Pashto CT2 fine-tune>` |
+  | Bengali `bn` | **104.1% — unusable** | `--lang bn --model <a Bengali CT2 fine-tune>` |
+
+  Above 100% word error means *worse than transcribing nothing*. Bengali is the
+  sharpest case after Pashto: with `whisper-small` a real Bengali news bulletin came
+  back as **Telugu script and English**, and the same audio through `large-v3` at
+  least returns Bengali script. Georgian, Gujarati, Punjabi, Malayalam and Telugu are
+  all in the same band, and hearsay now warns for every one of them.
 
   Pashto is the sharpest case: stock Whisper does not transcribe it so much as
   transliterate it into Arabic/Dari, dropping the Pashto-only letters
@@ -283,7 +302,7 @@ locally with the fastest engine your machine has. `--model auto` (the default) p
 
 | Engine | When | Speed | Notes |
 | --- | --- | --- | --- |
-| **Parakeet** (NVIDIA Parakeet-TDT on Apple MLX) | Apple Silicon + `parakeet` extra | ~24× realtime (M1 Pro) | `parakeet` is multilingual (25 European languages); `parakeet-en` is English-only |
+| **Parakeet** (NVIDIA Parakeet-TDT on Apple MLX) | Apple Silicon + `parakeet` extra | ~24× realtime (M1 Pro) | `parakeet-en` is English-only. `parakeet` advertises 25 European languages but **returns English for some of them** — see below; `auto` only uses it where that has been checked |
 | **Whisper** (faster-whisper, CPU int8) | everywhere else, or an explicit size | ~7× realtime | sizes `tiny`…`large-v3`; `large-v3` is the multilingual ceiling |
 
 On Apple Silicon, Parakeet is about **3× faster** than `whisper-small` at comparable
