@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hearsay.dataset.segmentation import _join_words
 from hearsay.dataset.words import words_from_parakeet, words_from_whisper
 from hearsay.models import Word
 
@@ -108,3 +109,54 @@ def test_parakeet_end_falls_back_to_start_plus_duration() -> None:
 
 def test_parakeet_empty_iterable() -> None:
     assert words_from_parakeet([]) == []
+
+
+# --- tokens that continue the previous word --------------------------------
+
+
+def _fw(word: str, start: float, end: float) -> SimpleNamespace:
+    """A faster-whisper Word, leading space and all (that space is the signal)."""
+    return SimpleNamespace(word=word, start=start, end=end, probability=0.9)
+
+
+def _pk(text: str, start: float, end: float) -> SimpleNamespace:
+    return SimpleNamespace(text=text, start=start, end=end, confidence=0.9)
+
+
+def test_whisper_tokens_that_split_inside_a_word_rejoin_cleanly() -> None:
+    """Whisper splits inside words and marks the difference with a leading space.
+
+    Real output for Uzbek "qo'shig'i." is ["qo'shig", "'i."]. Stripping the text
+    discarded the marker and a blind space rejoined it as "qo'shig 'i." — two broken
+    tokens in the transcript shipped alongside the audio. Uzbek okinas and French
+    elisions hit this constantly.
+    """
+    raw = [
+        _fw(" sodiqlar", 0.0, 0.5),
+        _fw(" qo'shig", 0.5, 1.0),
+        _fw("'i.", 1.0, 1.2),
+        _fw(" tehron", 1.2, 1.6),
+    ]
+    words = words_from_whisper(raw)
+    assert [w.joins_left for w in words] == [False, False, True, False]
+    assert _join_words(words) == "sodiqlar qo'shig'i. tehron"
+
+
+def test_a_leading_token_without_a_space_is_not_glued_to_nothing() -> None:
+    # faster-whisper omits the leading space on the first token of a segment.
+    words = words_from_whisper([_fw("eron", 0.0, 0.4), _fw(" tunda", 0.4, 0.8)])
+    assert words[0].joins_left is True  # no space, as the engine emits it
+    assert _join_words(words) == "eron tunda"  # but nothing precedes it
+
+
+def test_ordinary_words_are_unaffected() -> None:
+    words = words_from_whisper(
+        [_fw("The", 0.0, 0.2), _fw(" quick", 0.2, 0.5), _fw(" fox.", 0.5, 0.9)]
+    )
+    assert _join_words(words) == "The quick fox."
+
+
+def test_parakeet_words_never_join_left() -> None:
+    # The Parakeet adapter merges subwords itself, so each Word is already whole.
+    tokens = [_pk(" salom", 0.0, 0.4), _pk(" dunyo", 0.4, 0.8)]
+    assert all(not w.joins_left for w in words_from_parakeet(tokens))
