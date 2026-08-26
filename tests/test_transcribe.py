@@ -355,3 +355,36 @@ def test_a_gated_model_says_so() -> None:
 def test_a_real_network_problem_still_says_network() -> None:
     hint = transcribe._load_hint("small", Exception("Connection timed out"))
     assert "network" in hint
+
+
+def test_auto_only_uses_parakeet_where_it_was_measured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parakeet's advertised language list is not a measurement, and it is wrong.
+
+    Measured on real YouTube audio (parakeet-mlx 0.5.2, parakeet-tdt-0.6b-v3):
+    Spanish and French come back as fluent ENGLISH — 0 Spanish function words and
+    89 English ones across a 4-minute Spanish podcast, and the same on a Spanish
+    news bulletin and a French one. German, Italian and Russian transcribe
+    correctly. parakeet-mlx exposes no language argument at all, so `--lang` can
+    neither steer it nor detect the problem.
+    """
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: True)
+    assert transcribe._resolve_engine("auto", "es")[0] == "whisper"
+    assert transcribe._resolve_engine("auto", "fr")[0] == "whisper"
+    # Still used where it was measured to work.
+    assert transcribe._resolve_engine("auto", "de")[0] == "parakeet"
+    assert transcribe._resolve_engine("auto", "en")[0] == "parakeet"
+
+
+def test_auto_never_hands_an_unidentified_language_to_parakeet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown language is not a licence to guess with an unsteerable engine.
+
+    ``detect_language`` returns None when its guess is below the confidence floor.
+    That meant "we don't know what this is" resolved to Parakeet, which reads 25
+    European languages and transliterates everything else into confident nonsense.
+    """
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: True)
+    assert transcribe._resolve_engine("auto", None)[0] == "whisper"
