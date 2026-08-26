@@ -4,6 +4,61 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 — 2026-08-27
+
+Ten languages — Mandarin, Hindi, Spanish, Bengali, Japanese, Russian, Turkish,
+Vietnamese, Swahili and Korean — were built into datasets from real YouTube audio
+and checked end to end: structure, audio/text pairing, script authenticity, clip
+boundaries, and loading the result in HuggingFace `datasets`. Five defects came
+out of it, all of which produced *silently wrong* data rather than an error.
+
+### Fixed
+
+- **`auto` handed Spanish and French to an engine that returns English.** Parakeet's
+  25-language list came from its model card, not from measurement. On real audio a
+  Spanish podcast came back as fluent English — 0 Spanish function words against 89
+  English ones, and 0.02 character similarity to the same audio through `large-v3`.
+  A second Spanish source and a French one failed identically; German, Italian and
+  Russian were correct. `parakeet-mlx` takes **no language argument**, so `--lang es`
+  never reached the decoder — it only relabelled the output, stamping English text
+  with `language: "es"` in the dataset card. Both languages are Latin-script, so the
+  wrong-script filter could not see it either. `auto` now uses Parakeet only for
+  languages measured on real audio, and an unidentified language goes to Whisper
+  rather than to an engine that can be neither steered nor checked.
+- **Bengali had no target script, so nothing checked what came back.** A missing
+  entry in the script map does not fall back — it disables the wrong-script *and*
+  char-rate filters entirely. A real Bengali news bulletin built with no flags
+  shipped clips whose text was Telugu script and English (`independent news desk`),
+  0% Bengali, under `language: "bn"`, with zero `non_target_script` drops. The gap
+  was two levels deep: there was no Bengali block in the script table either, so
+  Bengali text classified as "other". Adds the missing scripts and maps the
+  languages that have exactly one. Uzbek stays unmapped on purpose — two scripts.
+- **Six languages Whisper's own table calls unusable were not warned about.** The
+  list cited FLEURS but was assembled by hand; parsing all 82 languages out of the
+  paper found Georgian 105.0, **Bengali 104.1**, Gujarati 102.7, Punjabi 102.4,
+  Malayalam 100.7 and Telugu 99.0 missing — all at or above the ~90% word error the
+  list is defined by, i.e. worse than transcribing nothing. `auto` also now opens
+  `large-v3` for Hindi, which was losing nearly half its accuracy to `whisper-small`
+  (38.4 vs 21.5), and for Bengali.
+- **A tokenizer-split number read as a sentence end.** Whisper emits `19.8` as
+  `["19.", "8"]`, and `"19."` matched the full-stop test. On a Mandarin news
+  bulletin the *only* three tokens in 977 that scored as sentence ends were `1.`,
+  `19.` and `5.` — every one half of a split decimal — and the sentence bonus then
+  pulled the clip boundary into the middle of the number: one clip ended `…同比多19.`
+  and the next began `8万亩`. `joins_left` already carried the tokenizer's answer;
+  nothing consulted it when choosing a cut. It does now.
+- **A playlist or feed card claimed English it never detected.** Both combined paths
+  defaulted `language` to `"en"`, which goes straight into the HuggingFace YAML front
+  matter, so a Mandarin playlist built without `--lang` asserted English. Uses
+  `"und"` — the value hearsay already uses for a language it cannot name.
+
+### Changed
+
+- The README's per-language guidance is now measured rather than asserted: the
+  fine-tune table covers all ten languages with Whisper's own FLEURS rates, Parakeet
+  is no longer described as broadly multilingual, and Bengali joins Uzbek and Pashto
+  as unusable without a fine-tune.
+
 ## 0.6.0 — 2026-08-27
 
 ### Added
