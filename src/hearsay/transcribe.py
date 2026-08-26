@@ -106,39 +106,23 @@ NEEDS_LARGE_WHISPER = frozenset(
         "yue",
     ]
 )
-# Parakeet TDT 0.6b v3 is multilingual over exactly these 25 European languages. It does
-# not refuse anything else — it transliterates it into confident nonsense, so an Urdu or
-# Arabic recording comes back as fluent-looking Latin gibberish with no error anywhere.
-# `auto` therefore must not hand it audio in a language it cannot read.
-PARAKEET_LANGUAGES = frozenset(
-    [
-        "bg",
-        "cs",
-        "da",
-        "de",
-        "el",
-        "en",
-        "es",
-        "et",
-        "fi",
-        "fr",
-        "hr",
-        "hu",
-        "it",
-        "lt",
-        "lv",
-        "mt",
-        "nl",
-        "pl",
-        "pt",
-        "ro",
-        "ru",
-        "sk",
-        "sl",
-        "sv",
-        "uk",
-    ]
-)
+# Languages `auto` will hand to Parakeet. Parakeet TDT 0.6b v3 *advertises* 25 European
+# languages, but that list is a model card, not a measurement — and it is wrong. Measured
+# on real YouTube audio (parakeet-mlx 0.5.2): Spanish and French come back as fluent
+# ENGLISH. A 4-minute Spanish podcast returned 0 Spanish function words and 89 English
+# ones, scoring 0.02 character similarity against the same audio through large-v3; a
+# separate Spanish news bulletin and a French one failed the same way. German, Italian and
+# Russian transcribed correctly.
+#
+# The failure is silent and cannot be fixed from here: parakeet-mlx takes no language
+# argument, so `--lang es` does not steer it — it only relabels the output, stamping
+# English text with `language: "es"` in the dataset card. Both languages are Latin-script,
+# so the wrong-script filter cannot catch it either.
+#
+# This list therefore holds only what has been *measured* to work. Everything else falls
+# back to Whisper: slower, but it can be forced to a language and its per-language error
+# rates are published. Add a language here once it has been checked on real audio.
+PARAKEET_LANGUAGES = frozenset(["de", "en", "it", "ru"])
 # Languages where even large-v3 is not usable, from Whisper's own FLEURS table: Uzbek
 # 90.2 and Pashto 93.7 word error at large-v2 — above 100% for the smaller sizes, i.e.
 # worse than transcribing nothing. Pashto is the starker case: it does not fail loudly
@@ -386,7 +370,10 @@ def _resolve_engine(model_size: str, language: str | None = None) -> tuple[str, 
     it cannot load), so an explicit choice is never silently downgraded.
     """
     if model_size == "auto":
-        if _parakeet_available() and (language is None or language in PARAKEET_LANGUAGES):
+        # `language is None` means detection was unconfident or failed. That is not a
+        # licence to guess with an engine that cannot be steered or checked, so an
+        # unidentified language goes to Whisper too (None is not in the frozenset).
+        if _parakeet_available() and language in PARAKEET_LANGUAGES:
             return "parakeet", PARAKEET_MODELS["parakeet"]
         if language in NEEDS_LARGE_WHISPER:
             return "whisper", LOW_RESOURCE_WHISPER
