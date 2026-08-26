@@ -403,3 +403,45 @@ def test_property_invariants_over_random_inputs() -> None:
 
         # 7. determinism
         assert segment_words(words, min_s=min_s, max_s=max_s, pause_break_s=pause_break_s) == segs
+
+
+def _joined(text: str, start: float, *, joins_left: bool = False) -> Word:
+    return Word(text=text, start_s=start, end_s=start + 0.5, joins_left=joins_left)
+
+
+def test_a_tokenizer_split_number_is_not_a_sentence_end() -> None:
+    """Whisper splits "19.8" into "19." + "8", and "19." looked like a full stop.
+
+    Measured on a real Mandarin news bulletin: across 977 tokens the ONLY three
+    tokens scoring as sentence ends were "1.", "19." and "5." — every one of them
+    half of a split decimal, and every one carrying joins_left=True on the token
+    after it. The +2.0 sentence bonus then steered the cut into the middle of the
+    number, so one clip ended "...同比多19." and the next began "8万亩".
+
+    `joins_left` is the tokenizer saying these two tokens are one unit, so a
+    boundary there cannot be the end of anything.
+    """
+    words = [
+        _joined("alpha", 0.0),
+        _joined("beta", 0.5),
+        _joined("end.", 1.0),  # a genuine sentence end
+        _joined("gamma", 1.5),
+        _joined("19.", 2.0),  # a split decimal, only "looks" like one
+        _joined("8", 2.5, joins_left=True),
+        _joined("delta", 3.0),
+        _joined("epsilon", 3.5),
+        _joined("zeta", 4.0),
+        _joined("eta", 4.5),
+    ]
+    segments = segment_words(words, min_s=1.0, max_s=5.0)
+    assert not segments[0].text.endswith("19."), (
+        f"cut through a number: {segments[0].text!r} | {segments[1].text!r}"
+    )
+    assert segments[0].text.endswith("end.")
+
+
+def test_a_real_sentence_end_still_scores() -> None:
+    # The guard keys off the NEXT token continuing this one; a normal word start
+    # must leave the sentence bonus intact.
+    assert _is_sentence_end("end.")
+    assert not _is_sentence_end("19.8")
