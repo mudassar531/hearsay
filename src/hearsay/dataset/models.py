@@ -177,6 +177,7 @@ class BuildReport(BaseModel):
     language: str
     formats: list[str]
     files: list[str] = Field(default_factory=list)  # index/card files written, relative
+    method: str | None = None  # transcription engine/model label, recorded on the card
     clips: list[DatasetClip] = Field(default_factory=list)
     dropped_count: int = 0
     drops_by_reason: dict[str, int] = Field(default_factory=dict)
@@ -194,6 +195,7 @@ class SourceResult(BaseModel):
     duration_s: float = 0.0
     dropped: int = 0
     error: str | None = None
+    language: str | None = None  # what transcription detected, so resume keeps it too
 
 
 class CombinedReport(BaseModel):

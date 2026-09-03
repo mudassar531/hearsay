@@ -40,3 +40,6 @@ because each needs real design, not a quick patch:
   (re-transcribe with a larger reference model, or a second engine, and flag low
   agreement) — deliberately **not** a brittle string heuristic, which would wrongly
   drop verbatim disfluencies ("And I I couldn't") and break the verbatim guarantee.
+  **Partly shipped in 0.8.0 as `hearsay verify`** — a sample-based, post-build pairing
+  and accuracy report. Still parked: a per-clip cross-check at *build* time that drops
+  low-agreement clips (2× transcription cost; needs a reference-model policy).

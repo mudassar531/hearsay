@@ -27,7 +27,7 @@ uv run mypy                 # types
 uv run pytest               # tests
 ```
 
-CI runs these on Python 3.11 and 3.12.
+CI runs these on Python 3.11, 3.12 and 3.13.
 
 ## Ground rules
 

@@ -195,3 +195,30 @@ def test_performance_on_ten_thousand_segments() -> None:
     ]
     paragraphs = group_segments(segments)
     assert words_of_paragraphs(paragraphs) == words_of(segments)
+
+
+# --- Sentence marks beyond ASCII ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "یہ پہلا جملہ ہے۔",  # Urdu full stop
+        "کیا آپ ٹھیک ہیں؟",  # Arabic question mark (Urdu/Arabic/Persian/Pashto)
+        "यह पहला वाक्य है।",  # Devanagari danda (Hindi/Nepali/Marathi/Bengali)
+        "这是第一句话。",  # CJK full stop
+        "これは最初の文です！",  # CJK exclamation
+    ],
+)
+def test_non_ascii_sentence_marks_pull_the_break(sentence: str) -> None:
+    """The Urdu, Hindi, Arabic and CJK sentence marks used to be invisible to the
+    grouper: only ``.!?`` scored, so those languages broke on pauses and word budget
+    alone, mid-sentence. Same shape as the ASCII test above, in each script."""
+    segments = [
+        seg(w, i * 1.0, i * 1.0 + 0.9)
+        for i, w in enumerate(
+            [f"alpha beta gamma delta {sentence}", "the next one keeps going onward"]
+        )
+    ]
+    paragraphs = group_segments(segments, min_words=3, max_words=8)
+    assert paragraphs[0].text.endswith(sentence[-1])

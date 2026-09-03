@@ -1,9 +1,10 @@
 # hearsay
 
-> **crawl4ai for video & audio.** One command turns any YouTube video, podcast
-> episode, or local recording into clean, timestamped, LLM-ready **markdown** —
+> **crawl4ai for video & audio.** One command turns any YouTube video, channel,
+> podcast episode, or local recording into clean, timestamped, LLM-ready **markdown** —
 > or a **TTS/STT training dataset** of sliced audio clips paired with verbatim
-> transcripts. Captions-first, runs locally, no plumbing.
+> transcripts, **verified**: hearsay re-listens to its own output and tells you whether
+> the audio matches the text. Captions-first, runs locally, no plumbing.
 
 [![PyPI](https://img.shields.io/pypi/v/hearsay)](https://pypi.org/project/hearsay/)
 [![CI](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml/badge.svg)](https://github.com/mudassar531/hearsay/actions/workflows/ci.yml)
@@ -31,6 +32,7 @@ uv tool install hearsay
 
 hearsay "https://youtu.be/VIDEO_ID"                       # → markdown
 hearsay dataset "https://youtu.be/VIDEO_ID" --out ./data  # → TTS/STT dataset
+hearsay verify ./data                                     # → does the audio match the text?
 ```
 
 Captions when they exist (fast, no download); local **Whisper** or Apple-Silicon
@@ -38,7 +40,7 @@ Captions when they exist (fast, no download); local **Whisper** or Apple-Silicon
 podcast feeds. Nothing leaves your machine.
 
 - [How it works](#how-it-works) · [Install](#install)
-- [🎙️ Build TTS/STT datasets](#-build-ttsstt-training-datasets) · [📄 Clean markdown](#-clean-timestamped-markdown)
+- [🎙️ Build TTS/STT datasets](#-build-ttsstt-training-datasets) · [✅ Verify a dataset](#-verify-a-dataset) · [📄 Clean markdown](#-clean-timestamped-markdown)
 - [Web UI](#web-ui) · [Transcription engines](#transcription-engines) · [Languages](#languages-what-actually-works) · [MCP server](#give-your-agent-ears)
 - [How it compares](#how-it-compares) · [CLI reference](#cli-reference) · [Requirements](#requirements)
 
@@ -58,12 +60,15 @@ flowchart LR
     W --> X
     X --> M["📄 markdown<br/>paragraphs · timestamps<br/>chapters · JSON sidecar"]
     X --> D["🎙️ TTS/STT dataset<br/>audio clips + transcripts<br/>LJSpeech · NeMo · HF"]
+    D --> V["✅ hearsay verify<br/>audio↔text pairing · script · edges"]
 ```
 
 - **Captions-first.** Uses the source's captions when available — fast, no media download.
 - **Falls back to transcription** automatically (CPU Whisper, or Parakeet on Apple Silicon).
 - **Local & private.** Everything runs on your machine; hearsay hosts nothing and ships no data.
-- **Scales.** One video, a whole YouTube playlist, or a podcast RSS feed — batched into one output.
+- **Scales.** One video, a whole YouTube playlist or channel, or a podcast RSS feed — batched into one output.
+- **Verified.** `hearsay verify` re-transcribes a sample of the clips it cut and proves the
+  audio matches the text — every dataset ships with its own `verification.md`.
 
 ## Install
 
@@ -110,6 +115,13 @@ hearsay dataset "https://www.dailymotion.com/video/VIDEO_ID" --out ./voice-data
 
 # A whole playlist / channel / podcast feed → one merged dataset
 hearsay dataset "https://example.com/feed.xml" --out ./speech-data
+hearsay dataset "https://www.youtube.com/@channel" --out ./voice-data --limit 20
+
+# Build, then verify the result in one go (exit code follows the verdict)
+hearsay dataset talk.mp3 --out ./d --verify
+
+# On a machine with an NVIDIA GPU (auto-detected; force with --device cuda|cpu)
+hearsay dataset talk.mp3 --device cuda
 
 # 16 kHz mono for ASR, custom clip length
 hearsay dataset talk.mp3 --sample-rate 16000 --segment-min 2 --segment-max 12
@@ -126,13 +138,18 @@ voice-data/
   metadata.csv                  # LJSpeech: id|text|text   (Coqui / Piper read this directly)
   manifest.jsonl                # NeMo / ESPnet: {"audio_filepath","duration","text","offset"}
   metadata.jsonl                # (with --format hf) HuggingFace audiofolder index
-  dataset_card.md               # provenance, counts, language + a rights/consent note
+  dataset_card.md               # provenance, counts, language, model + a rights/consent note
   dropped.jsonl                 # every filtered-out clip, with the reason
+  verification.md               # (with --verify, or `hearsay verify`) the evidence + verdict
 ```
 
 - **Any source yt-dlp reaches.** Metadata and audio both come from yt-dlp, so a
-  Dailymotion, SoundCloud or Twitch link works exactly like a YouTube one. A playlist
-  or feed merges into a single dataset.
+  Dailymotion, SoundCloud or Twitch link works exactly like a YouTube one. A playlist,
+  a channel (`/@handle`, `/channel/UC…`) or a feed merges into a single dataset.
+- **YouTube asking you to sign in?** Its "confirm you're not a bot" check is the most
+  common failure today. Pass `--cookies-from-browser chrome` (or `firefox`, `safari`,
+  `edge`) and yt-dlp reuses your browser's login; the web UI and MCP server take the same
+  through `HEARSAY_YTDLP_ARGS='--cookies-from-browser chrome'`.
 - **Word-accurate, click-free cuts.** Clips are sliced on word-level timestamps
   (faster-whisper `word_timestamps`, or Parakeet on Apple Silicon), padded a little
   on each edge (`--pad`) and given a short fade so boundaries never click or clip a
@@ -217,6 +234,41 @@ voice-data/
 
 Want to see the output shape without running anything? There's a tiny committed
 example under [`examples/dataset/`](examples/dataset/).
+
+## ✅ Verify a dataset
+
+Files are easy. The question a training run answers late and expensively is whether
+clip *N*'s audio is actually clip *N*'s text. `hearsay verify` answers it up front, on
+the files themselves, and writes the evidence next to them:
+
+```bash
+hearsay verify ./voice-data                  # → verification.md + verification.json
+hearsay dataset talk.mp3 --out ./d --verify  # build, then verify, in one command
+```
+
+It is [the ten-language sweep](docs/language-verification.md) that found five
+silently-wrong outputs in 0.7.0, run by a command instead of by hand — and it trusts
+nothing the build reported. Every number is measured on the produced files:
+
+- **Pairing.** A random sample of clips (default 8) is re-transcribed with the model the
+  card records, and each hypothesis is diffed against its own row *and* against another
+  clip's row. The **gap** between the two is the pairing signal: a correct dataset shows
+  +0.3 or more; a manifest shifted by one row — the classic bug no structural check can
+  see — shows ~0. The self-similarity on its own is the accuracy signal: 0.90 and up
+  means the model reads the language; 0.6 with a healthy gap means the pairing is right
+  and the *language* needs a fine-tune.
+- **Script.** The share of clips written in the language's real script — what catches a
+  model that transliterated (Pashto into Dari) or switched language (Bengali into Telugu).
+- **Clip edges.** The share of clips whose first or last 25 ms carry speech-level energy:
+  a cut through a word rather than on silence.
+- **Structure.** Every row has its WAV, ids are unique, text is non-empty, audio is mono
+  16-bit at one sample rate, listed durations match the files, no orphan clips, and
+  `metadata.csv` agrees with `manifest.jsonl`.
+
+The verdict is **trainable**, **marginal** or **not trainable**, with every reason
+spelled out in `verification.md`, and the exit code follows it (0 / 1 / 2) so a pipeline
+can gate on it. It reads any LJSpeech, NeMo or HuggingFace `audiofolder` folder, not
+only hearsay's own — so it also audits a dataset you were handed.
 
 ## 📄 Clean, timestamped markdown
 
@@ -307,7 +359,10 @@ locally with the fastest engine your machine has. `--model auto` (the default) p
 
 On Apple Silicon, Parakeet is about **3× faster** than `whisper-small` at comparable
 accuracy. If the `parakeet` extra isn't installed, `auto` falls back to `whisper-small`
-automatically — so hearsay behaves the same everywhere, just faster on a Mac. Models
+automatically — so hearsay behaves the same everywhere, just faster on a Mac. On a
+machine with an **NVIDIA GPU**, `--device auto` (the default) runs Whisper on CUDA in
+float16; `--device cpu` forces the CPU. Models are opened once per process, so a
+playlist pays the load once, not once per video. Models
 download once (Whisper: tens of MB to ~1.5 GB; Parakeet v3: ~2.5 GB) and cache for
 offline use.
 
@@ -319,7 +374,8 @@ offline use.
 
 Ten languages were built into datasets from real YouTube audio and measured end to end —
 audio/text pairing, script authenticity, structure, and loading the result in HuggingFace
-`datasets`. **[Full method and caveats →](docs/language-verification.md)**
+`datasets`. **[Full method and caveats →](docs/language-verification.md)** — and that sweep is now a
+command: run [`hearsay verify`](#-verify-a-dataset) on your own dataset.
 
 | language | clips | pairing mean / median | script | trainable |
 | --- | --- | --- | --- | --- |
@@ -354,7 +410,8 @@ Previously verified the same way: English, Uzbek, Urdu, Arabic, Pashto, Polish.
 
 hearsay ships an [MCP](https://modelcontextprotocol.io) server so AI agents can ingest
 media themselves. It exposes two tools — `ingest_url(url, transcribe?, lang?)` and
-`ingest_file(path)` — that each return clean, timestamped markdown.
+`ingest_file(path)` — that each return clean, timestamped markdown. `ingest_url` takes a
+YouTube URL (captions first) or any media page yt-dlp supports (transcribed locally).
 
 ```bash
 uv tool install "hearsay[mcp]"
@@ -394,6 +451,8 @@ Server configuration (env vars, since MCP tool signatures are fixed):
 | `HEARSAY_LANG` | _(unset)_ | Default language: English captions, else transcription auto-detect |
 | `HEARSAY_VAD` | `1` | Voice-activity filter (Whisper); set `0` for music/songs |
 | `HEARSAY_PARAKEET_MODEL` | _(unset)_ | Override the Parakeet MLX repo id (advanced) |
+| `HEARSAY_DEVICE` | `auto` | Whisper device: `auto` (CUDA when present, else CPU), `cpu`, or `cuda` |
+| `HEARSAY_YTDLP_ARGS` | _(unset)_ | Extra yt-dlp flags, shell-quoted — e.g. `--cookies-from-browser chrome` for YouTube's sign-in check |
 
 ## How it compares
 
@@ -405,10 +464,11 @@ Server configuration (env vars, since MCP tool signatures are fixed):
 | Captions-first (no download) | ✅ | ✗ usually re-transcribes | n/a |
 | Timestamps + paragraph grouping | ✅ readable | ✗ raw segments | n/a |
 | Chapters → sections | ✅ | ✗ manual | n/a |
-| Podcasts · playlists · batch | ✅ | ✗ manual | ✗ |
+| Podcasts · playlists · channels · batch | ✅ | ✗ manual | ✗ |
 | Fast Apple-Silicon engine | ✅ Parakeet (MLX) | ✗ DIY | n/a |
 | JSON sidecar for RAG | ✅ stable schema | ✗ manual | varies |
 | Browser UI + MCP server | ✅ | ✗ | varies |
+| **Verifies its own output** (audio↔text pairing report) | ✅ `hearsay verify` | ✗ | ✗ |
 
 hearsay does **media**; document tools like
 [markitdown](https://github.com/microsoft/markitdown) and
@@ -417,7 +477,8 @@ hearsay does **media**; document tools like
 ## CLI reference
 
 ```text
-hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS, or local file
+hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist/channel URL, any yt-dlp media
+                                URL, podcast RSS feed, or local file
 
   -o, --output PATH    Output file for a single source (default ./<id>.md)
   --output-dir PATH    Output directory for batch (playlist/feed) ingestion (default ./hearsay-out)
@@ -429,6 +490,8 @@ hearsay <SOURCE> [options]      SOURCE = YouTube video/playlist URL, podcast RSS
   --latest             Batch: ingest only the most recent item
   --episode N          Batch: ingest only item N (1-indexed)
   --all [--limit N]    Batch: ingest all items (optionally capped)
+  --device DEV         Whisper device: auto (CUDA if present, else CPU) | cpu | cuda
+  --cookies-from-browser B   Reuse a browser's YouTube login (chrome, firefox, safari, edge)
 
 hearsay dataset <SOURCE> [options]   Build a TTS/STT training dataset
   --out PATH           Dataset output directory (default ./hearsay-dataset)
@@ -442,9 +505,17 @@ hearsay dataset <SOURCE> [options]   Build a TTS/STT training dataset
   --per-speaker        Diarize and emit a per-speaker index
   --dominant-speaker   Diarize and keep only the most-spoken speaker
   --model / --lang / --vad / --no-vad    Transcription (as above)
-  --limit N            Batch: cap items from a playlist/feed
+  --limit N            Batch: cap items from a playlist/channel/feed
+  --verify             Re-transcribe a sample of clips afterwards and write verification.md
+  --device / --cookies-from-browser   As above
 
-hearsay web            Run the local web UI (--host, --port)
+hearsay verify <DIR> [options]   Verify a dataset folder (LJSpeech / NeMo / HF audiofolder)
+  --sample N           Clips to re-transcribe for the pairing check (default 8)
+  --seed N             Sample seed, so reports reproduce (default 0)
+  --model / --lang     Default: what the dataset card records
+  exit code            0 trainable · 1 marginal · 2 not trainable
+
+hearsay web            Run the local web UI (--host, --port, --device)
 hearsay mcp            Run the MCP stdio server
 hearsay --version      Show the version
 ```
@@ -474,7 +545,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [CHANGELOG.md](CHANGELOG.md). hearsay does one thing well — turn media into clean
 markdown and training-ready datasets — and aims to keep doing exactly that.
 
-**How it's tested.** 412 tests run on every push and pull request (Python 3.11 and 3.12)
+**How it's tested.** 479 tests run on every push and pull request (Python 3.11, 3.12 and 3.13)
 alongside `ruff` and `mypy`. They run **offline** against committed fixtures — no network,
 no model downloads — so the suite is fast and deterministic; the model-gated tests skip
 cleanly when no checkpoint is cached. On top of that, dataset output is periodically

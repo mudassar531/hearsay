@@ -6,6 +6,7 @@ separate end-to-end test transcribes the clip with the tiny model and skips if i
 is not cached.
 """
 
+import itertools
 import json
 import subprocess
 from pathlib import Path
@@ -431,3 +432,75 @@ def test_well_served_languages_are_not_warned_about(tmp_path: Path) -> None:
         transcription_method="whisper-small",
     )
     assert not any("cannot really transcribe" in w for w in report.warnings)
+
+
+# --- Source ids keep their identity across scripts and runs -----------------
+
+
+def test_safe_id_keeps_ascii_video_ids_verbatim() -> None:
+    from hearsay.dataset.build import _safe_id
+
+    assert _safe_id("dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert _safe_id("Episode 12: Hello") == "Episode-12-Hello"
+
+
+def test_safe_id_distinguishes_non_latin_titles() -> None:
+    """Every Urdu, Bengali or Chinese title used to slug to the same ``clip``; the
+    combined builder then numbered them by feed order, and a resumed build re-used
+    the wrong episode's clips once a new one was published."""
+    from hearsay.dataset.build import _safe_id
+
+    urdu_1, urdu_2 = _safe_id("اردو پوڈکاسٹ پہلی قسط"), _safe_id("اردو پوڈکاسٹ دوسری قسط")
+    assert urdu_1 != urdu_2
+    assert urdu_1.startswith("clip-") and urdu_1 == _safe_id("اردو پوڈکاسٹ پہلی قسط")  # stable
+    assert _safe_id("বাংলা সংবাদ") != _safe_id("第一集")
+    assert all(ch.isascii() for ch in urdu_1)  # still a filename every toolchain opens
+
+
+def test_episode_source_id_comes_from_the_guid() -> None:
+    from hearsay.dataset.build import _episode_source
+    from hearsay.feeds import Episode
+
+    def make(guid: str):
+        ep = Episode(
+            title="Weekly show", audio_url=f"https://x/{guid}.mp3", duration_s=1, guid=guid
+        )
+        return _episode_source(
+            ep,
+            "Show",
+            model_size="tiny",
+            language=None,
+            vad_filter=True,
+            episode_downloader=lambda url, dest: dest,  # never called: only the id is inspected
+            transcriber=lambda *a, **k: None,  # type: ignore[arg-type]
+        )
+
+    a, b = make("guid-a"), make("guid-b")
+    assert a.source_id != b.source_id  # same title, different episodes
+    assert a.source_id == make("guid-a").source_id  # and stable across runs
+
+
+def test_edge_padding_never_reaches_into_a_neighbour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "fox." ends at 1.9 s and "Jumps" starts at 2.0 s. With a 0.1 s pad each side, the
+    first clip used to run to 2.0 and the second start at 1.9 — each carrying a phoneme
+    of the other's word that its own transcript does not contain."""
+    spans: list[tuple[float, float]] = []
+    real_slice = ds_build.slice_clip
+
+    def recording_slice(source, start, end, dest, **kwargs):
+        spans.append((start, end))
+        return real_slice(source, start, end, dest, **kwargs)
+
+    monkeypatch.setattr(ds_build, "slice_clip", recording_slice)
+    config = DatasetConfig(
+        out_dir=tmp_path, segment_min_s=1.0, segment_max_s=2.0, edge_pad_s=0.1, filters=_NO_FILTER
+    )
+    build_dataset(SAMPLE, _synthetic_words(), _meta(), config=config, language="en")
+    assert len(spans) >= 2
+    assert spans[0][1] == pytest.approx(1.95)  # half of the 0.1 s gap, not the full pad
+    assert spans[1][0] >= spans[0][1]  # no overlap anywhere
+    for (_, prev_end), (next_start, _) in itertools.pairwise(spans):
+        assert next_start >= prev_end
+    assert spans[0][0] == 0.0 and spans[-1][1] <= 4.71 + 1e-9  # outer edges still padded/clamped

@@ -26,6 +26,10 @@ class SourceMetadata(BaseModel):
     duration_s: float = Field(ge=0)
     video_id: str
     chapters: list[Chapter] = Field(default_factory=list)
+    # Set by dataset mode once a source has been transcribed, so a combined build can
+    # say what its sources were detected as instead of "und". Unused by the markdown path,
+    # whose Document carries its own language.
+    language: str | None = None
 
 
 class Segment(BaseModel):

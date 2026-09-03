@@ -34,3 +34,34 @@ Log of every deviation from SPEC.md, each with one line of reasoning. Never devi
 - **2026-06-13 — CLI is a single Typer command for Phase 1–3, not a command group.** A group with an `invoke_without_command` callback misparses options given after the positional `SOURCE` (`hearsay <url> --output x` fails with "No such command --output"). A single command keeps option order natural. The `mcp` subcommand in Phase 4 will convert this to a group and move `--version`/source handling onto a callback at that point.
 - **2026-06-13 — Paragraph-grouping algorithm: pause-primary design chosen via a judge panel.** This is the core feature, so three independent implementations (pause-primary, sentence-primary, scored-boundary) were built against the real fixtures and scored by a 3-lens panel (readability, spec conformance, robustness). The sentence-primary candidate was lost to a mid-run model switch; of the two survivors the panel voted 2–1 for the pause-primary design: it held 100% of paragraphs inside the 40–120 word budget on both fixtures (the scored-boundary rival shipped 123- and 136-word paragraphs, violating the cap the spec names), and its dangling-word penalty avoided mid-phrase cuts like splitting "large | language models" that the rival made repeatedly on unpunctuated captions. The robustness judge preferred the rival only because the winner had two cheap-to-fix bugs (an IndexError on empty segments, a degenerate-param collapse). Both were fixed and the best ideas from the rival were grafted in: a discourse-marker begin-bonus, a two-sided boundary check, an ellipsis tier, abbreviation demotion, and a slightly lower target size. All verified by tests.
 - **2026-06-13 — STEP ZERO's three files share one bootstrap commit (58127c1).** They are the documents that establish the one-commit-per-task process itself, so a single bootstrap commit predating the process is the honest representation.
+
+
+## 0.8.0 — verification, identity, and the machine it runs on (2026-09-03)
+
+- **`hearsay verify` lives in `dataset/verify.py` with no new dependency.** Similarity is
+  `difflib.SequenceMatcher` at character level after NFKC + casefold + punctuation
+  removal, which behaves the same for spaced and unspaced scripts; WAVs are read with
+  `wave` and numpy (already present via faster-whisper). A proper WER would need
+  language-specific tokenisation for CJK/Thai and a new dependency; the pairing *gap*
+  does not need it, because self and control are scored the same way. Thresholds are
+  the ones measured in `docs/language-verification.md` (gap +0.37…+0.82 for correct
+  pairings; self 0.91…0.999 where the model reads the language), not guesses.
+- **Edge-energy check is a heuristic and says so.** First/last 25 ms RMS within 6 dB of
+  the body means a cut through speech. A music bed makes every edge hot; the report
+  notes it rather than pretending otherwise. Upgrade path: a VAD-based check.
+- **Source ids append a digest instead of slugging Unicode.** Keeping Urdu in the
+  filename would be lossless, but `\w` drops combining marks (mangling Bengali) and some
+  training toolchains choke on non-ASCII paths. An ASCII slug plus eight hex characters
+  of sha1 over the feed guid keeps filenames portable and identity exact. Cost: feed
+  datasets started under 0.7 rebuild once.
+- **Runtime knobs travel as env vars.** `--device` and `--cookies-from-browser` set
+  `HEARSAY_DEVICE` / `HEARSAY_YTDLP_ARGS`, which the MCP server and web UI already read.
+  One mechanism for every entry point beats threading two parameters through eleven
+  signatures and their injected test doubles.
+- **One transcription lock per process, not a semaphore.** The web UI and MCP server take
+  requests on threads; two decodes at once double model memory and gain nothing on a
+  saturated CPU. `# ponytail:` a semaphore sized to the GPU when a CUDA box wants lanes.
+- **Sentence marks are one shared table.** `grouping.py` and `segmentation.py` had
+  deliberately redeclared their regexes to stay independent; a Unicode table duplicated
+  twice would drift. Both now import the leaf module `punctuation.py`, which depends on
+  nothing, so they stay independent of *each other*.

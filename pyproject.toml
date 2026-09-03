@@ -1,7 +1,7 @@
 [project]
 name = "hearsay"
-version = "0.7.0"
-description = "crawl4ai for video & audio — turn any YouTube video, podcast, or recording into clean timestamped LLM-ready markdown, or TTS/STT training datasets"
+version = "0.8.0"
+description = "crawl4ai for video & audio — turn any YouTube video, channel, podcast, or recording into clean timestamped LLM-ready markdown, or verified TTS/STT training datasets"
 readme = "README.md"
 authors = [
     { name = "Mudassar Awan", email = "mudassar.awan@snapdev.ai" }
@@ -105,7 +105,9 @@ src = ["src", "tests"]
 # These characters are intentional typography: the en dash appears in
 # time-span section titles, and the curly quotes are matched literally in
 # the grouping module's punctuation regexes (transcripts contain them).
-allowed-confusables = ["–", "“", "”", "‘", "’"]
+# The rest are sentence and clause marks of the scripts hearsay transcribes
+# (Urdu, Armenian, CJK fullwidth), matched literally in hearsay.punctuation.
+allowed-confusables = ["–", "“", "”", "‘", "’", "۔", "։", "՝", "！", "？", "，", "：", "；"]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -135,7 +137,7 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 # These third-party deps ship no type stubs or py.typed marker (pyannote is an
 # optional extra and is not installed in the dev/test environment at all).
-module = ["faster_whisper.*", "feedparser.*", "parakeet_mlx.*", "pyannote.*"]
+module = ["ctranslate2.*", "faster_whisper.*", "feedparser.*", "parakeet_mlx.*", "pyannote.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

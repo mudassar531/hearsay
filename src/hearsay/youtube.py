@@ -1,7 +1,9 @@
 """YouTube URL parsing and metadata fetching via yt-dlp (no media download)."""
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -54,10 +56,30 @@ def _valid_id(candidate: str) -> str | None:
 
 
 _METADATA_TIMEOUT_S = 60
+# Listing is a flat metadata pass, but a channel can hold thousands of videos.
+_PLAYLIST_TIMEOUT_S = 300
 _DOWNLOAD_TIMEOUT_S = 600
 
 
 _PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+# Channel pages: /@handle, /channel/UC…, /c/Name, /user/Name — optionally followed by a
+# tab that lists videos. Handles may contain periods.
+_CHANNEL_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
+_CHANNEL_PREFIXES = frozenset({"channel", "c", "user"})
+_CHANNEL_TABS = frozenset({"videos", "streams", "shorts"})
+
+
+def _ytdlp(*args: str) -> list[str]:
+    """The yt-dlp command line: the interpreter's module, ``HEARSAY_YTDLP_ARGS``, then ``args``.
+
+    ``HEARSAY_YTDLP_ARGS`` is a shell-quoted string of extra yt-dlp flags, applied to every
+    yt-dlp call hearsay makes. Its main use is ``--cookies-from-browser chrome`` (the CLI's
+    ``--cookies-from-browser`` sets it): YouTube increasingly answers anonymous requests
+    with "Sign in to confirm you're not a bot", and a signed-in browser's cookies are the
+    fix yt-dlp documents. Kept as an env var so the MCP server and web UI get it too.
+    """
+    extra = shlex.split(os.environ.get("HEARSAY_YTDLP_ARGS", ""))
+    return [sys.executable, "-m", "yt_dlp", *extra, *args]
 
 
 class PlaylistEntry(NamedTuple):
@@ -94,48 +116,82 @@ def extract_video_id(url: str) -> str | None:
 
 
 def extract_playlist_id(url: str) -> str | None:
-    """Return the playlist id from a canonical /playlist?list=... URL, else None.
+    """Return the id of a batch source — a playlist, or a channel — else None.
 
-    The path must be exactly ``/playlist`` (parsed, not substring-matched), so a
-    ``watch?v=...&list=...`` URL — or a watch URL with ``/playlist`` buried in a
-    query param — is treated as a single video and ingests just that video.
+    A playlist is a canonical ``/playlist?list=...`` URL: the path must be exactly
+    ``/playlist`` (parsed, not substring-matched), so a ``watch?v=...&list=...`` URL —
+    or a watch URL with ``/playlist`` buried in a query param — is treated as a single
+    video and ingests just that video. A channel is ``/@handle``, ``/channel/UC…``,
+    ``/c/Name`` or ``/user/Name`` on a YouTube host, optionally with a video-listing
+    tab; its handle or id is returned. Channels used to fall through to the
+    single-video path, where yt-dlp tried to dump every video and timed out.
     """
     parsed = urlparse(url)
-    if parsed.path.rstrip("/") != "/playlist":
+    if parsed.path.rstrip("/") == "/playlist":
+        values = parse_qs(parsed.query).get("list")
+        if not values:
+            return None
+        candidate = values[0]
+        return candidate if _PLAYLIST_ID.match(candidate) else None
+    return _channel_key(url)
+
+
+def _channel_key(url: str) -> str | None:
+    """The handle or id of a YouTube channel URL, or None if ``url`` is not one."""
+    resolved = _canonical_host(url)
+    if resolved is None:
         return None
-    values = parse_qs(parsed.query).get("list")
-    if not values:
+    host, parsed = resolved
+    if host not in _YOUTUBE_HOSTS:
         return None
-    candidate = values[0]
-    return candidate if _PLAYLIST_ID.match(candidate) else None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments:
+        return None
+    if segments[0].startswith("@") and len(segments[0]) > 1:
+        key, rest = segments[0], segments[1:]
+    elif segments[0] in _CHANNEL_PREFIXES and len(segments) >= 2:
+        key, rest = segments[1], segments[2:]
+    else:
+        return None
+    if rest and (len(rest) > 1 or rest[0] not in _CHANNEL_TABS):
+        return None  # /playlists, /about, /community … list something other than videos
+    return key if _CHANNEL_KEY.match(key.lstrip("@")) else None
+
+
+def listing_url(url: str) -> str:
+    """The URL to hand yt-dlp when listing ``url``: a bare channel page becomes its Videos tab.
+
+    ``--flat-playlist`` on a channel *root* returns the channel's tabs (Videos, Shorts,
+    Live) as nested playlists whose ids are not video ids; the Videos tab lists videos.
+    """
+    resolved = _canonical_host(url)
+    if resolved is None or _channel_key(url) is None:
+        return url
+    _host, parsed = resolved
+    segments = [s for s in parsed.path.split("/") if s]
+    if segments[-1] in _CHANNEL_TABS:
+        return url
+    path = "/" + "/".join([*segments, "videos"])
+    return parsed._replace(path=path, query="", fragment="").geturl()
 
 
 def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:
-    """List a playlist's entries via `yt-dlp --flat-playlist` (no per-video fetch).
+    """List a playlist's or channel's entries via `yt-dlp --flat-playlist` (no per-video fetch).
 
     Returns (playlist_title, entries). Raises PlaylistError on failure.
     """
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
-                "-J",
-                "--flat-playlist",
-                "--no-warnings",
-                "--",
-                url,
-            ],
+            _ytdlp("-J", "--flat-playlist", "--no-warnings", "--", listing_url(url)),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=_METADATA_TIMEOUT_S,
+            timeout=_PLAYLIST_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         raise PlaylistError(
-            f"Timed out listing playlist {url} after {_METADATA_TIMEOUT_S}s.",
+            f"Timed out listing playlist {url} after {_PLAYLIST_TIMEOUT_S}s.",
             hint="Check your network connection and try again.",
         ) from None
     if proc.returncode != 0:
@@ -181,16 +237,7 @@ def fetch_raw_metadata(url: str) -> dict:
     """
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
-                "--dump-json",
-                "--no-warnings",
-                "--no-playlist",
-                "--",
-                url,
-            ],
+            _ytdlp("--dump-json", "--no-warnings", "--no-playlist", "--", url),
             capture_output=True,
             text=True,
             encoding="utf-8",  # yt-dlp emits UTF-8 JSON; do not trust the locale
@@ -230,7 +277,16 @@ def _map_ytdlp_error(url: str, stderr: str) -> HearsayError:
     if "age" in lowered and "confirm" in lowered:
         return VideoUnavailableError(
             f"This video is age-restricted and cannot be fetched anonymously: {url}",
-            hint="Try a video that does not require sign-in.",
+            hint="Pass --cookies-from-browser chrome (or firefox, safari, edge) so yt-dlp "
+            "reuses a signed-in browser's YouTube session, or try a video without a gate.",
+        )
+    if "not a bot" in lowered or "sign in to confirm" in lowered:
+        # The most common real-world failure today, and "update yt-dlp" is the wrong advice.
+        return VideoUnavailableError(
+            f"YouTube wants a signed-in session before it will serve {url} (its bot check).",
+            hint="Pass --cookies-from-browser chrome (or firefox, safari, edge) so yt-dlp "
+            "reuses your browser's YouTube login. For the web UI or MCP server, set "
+            "HEARSAY_YTDLP_ARGS='--cookies-from-browser chrome' instead.",
         )
     if "is not a valid url" in lowered or "unsupported url" in lowered:
         return InvalidSourceError(
@@ -256,10 +312,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     out_template = str(dest_dir / "%(id)s.%(ext)s")
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
+            _ytdlp(
                 "-f",
                 "bestaudio[ext=m4a]/bestaudio/best",
                 "--no-playlist",
@@ -268,7 +321,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
                 out_template,
                 "--",
                 url,
-            ],
+            ),
             capture_output=True,
             text=True,
             encoding="utf-8",

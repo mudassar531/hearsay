@@ -4,6 +4,82 @@ All notable changes to hearsay are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0 — 2026-09-03
+
+A dataset that cannot prove itself is a guess. 0.8.0 adds `hearsay verify`: the
+ten-language sweep behind the 0.7.0 fixes, run by a command on the produced files, so
+every dataset ships with its own evidence. Around it, a review of the whole codebase
+fixed six silent-output bugs — several in exactly the languages hearsay is measured on.
+
+### Added
+
+- **`hearsay verify DIR`** re-transcribes a random sample of clips and diffs each
+  against its own row *and* against another clip's row; the gap is the pairing signal
+  (a manifest shifted by one row scores ~0, a correct one +0.3 or more) and the self
+  score alone is the accuracy signal, so a perfect pairing through a model that cannot
+  read the language is told apart from a broken pairing. It also measures the share of
+  clips in the language's real script, the share cut through speech rather than on
+  silence (first/last 25 ms energy against the body), and eight structural invariants.
+  Writes `verification.md` + `verification.json`; the verdict is trainable / marginal /
+  not trainable with every reason spelled out, and the exit code follows it (0/1/2).
+  Reads any LJSpeech, NeMo or HuggingFace `audiofolder` tree. **`hearsay dataset
+  --verify`** runs it straight after a build, with the same model.
+- **YouTube channels** are batch sources: `/@handle`, `/channel/UC…`, `/c/Name`,
+  `/user/Name`, with or without a `videos`/`streams`/`shorts` tab.
+- **`--device auto|cpu|cuda`** (and `HEARSAY_DEVICE` for the MCP server): Whisper runs on
+  CUDA in float16 when ctranslate2 sees a GPU. It was pinned to the CPU.
+- **`--cookies-from-browser chrome|firefox|safari|edge`** on every command, and
+  `HEARSAY_YTDLP_ARGS` for extra yt-dlp flags in the web UI and MCP server. YouTube's
+  "Sign in to confirm you're not a bot" now names this flag instead of "update yt-dlp".
+- The MCP `ingest_url` tool accepts any site yt-dlp supports, as the CLI and web UI did.
+- The dataset card records `transcription_method`, and a combined (playlist/feed) card
+  names the language its sources were detected as instead of `und` whenever they agree.
+
+### Fixed
+
+- **Sentence marks beyond ASCII.** Both the paragraph grouper and the clip segmenter
+  tested for `.!?` and `,;:` only, so an Urdu `۔`, a Hindi `।`, an Arabic `؟` or a
+  Chinese `。` never counted as a boundary and those languages were cut on pauses and
+  duration alone. One shared table (`hearsay.punctuation`) covers Latin, Arabic-script,
+  Indic, CJK, Ethiopic, Myanmar, Khmer, Tibetan and Armenian marks.
+- **Resume state could attach the wrong episode's clips.** Source ids were an ASCII-only
+  slug, so every Urdu, Bengali or Chinese episode title became `clip`, numbered by feed
+  order; a newly published episode shifted the numbers and a resumed build re-used
+  another episode's cached clips. Ids now carry a short digest of the episode's guid
+  (or of the title itself when the slug lost letters), stable across runs and distinct
+  across episodes. **A feed dataset started under 0.7 rebuilds once under 0.8.** YouTube
+  video ids are unchanged. The markdown batch slug also kept dropping the vowel signs
+  of abugida titles (`বাংলা` → `বল`); it keeps them.
+- **Channel URLs** fell through to the single-video path, where yt-dlp tried to dump
+  every video, hit the 60 s timeout and blamed the network.
+- **The language probe only ran on Apple Silicon.** It was gated on the parakeet extra,
+  but it also decides whether a low-resource language gets `large-v3` — so on Linux and
+  Windows a Hindi or Bengali file with no `--lang` went through `whisper-small` while
+  the README promised otherwise. It now runs wherever `auto` runs, and decodes only its
+  30 s window instead of the whole file (700 MB of float32 for a three-hour podcast).
+- **Edge padding bled into the neighbouring word.** Padding was applied per clip with no
+  knowledge of the next one, so at a cut with a gap shorter than twice the pad adjacent
+  WAVs overlapped and each carried a phoneme its transcript did not contain. Each side
+  now gets at most half the silence to its neighbour.
+- **The MCP server could only ingest YouTube.** A Dailymotion URL went down the captions
+  path and surfaced "video unavailable" instead of transcribing.
+- The web UI sent the dataset zip base64-encoded inside JSON (an hour of audio became a
+  213 MB string the browser had to decode); it is now a file download with the summary
+  in a header. A malformed JSON body is a 400, not a 500.
+- `--lang` is validated before captions are fetched (`--lang urdu` used to quietly hand
+  back whatever track existed), and a fallback to another caption language is announced.
+- Whisper reports `und` rather than `en` when it could not name the language.
+
+### Changed
+
+- Models are opened once per process (a fifty-video playlist loaded the same checkpoint
+  fifty times; the web UI and MCP server once per request), and one lock serialises
+  transcription so two browser tabs cannot load two copies of `large-v3` into 16 GB.
+- Dataset mode turns off `condition_on_previous_text` and sets a hallucination-silence
+  threshold, so a music bed no longer becomes "Thank you for watching" repeated down the
+  file. The markdown path keeps Whisper's defaults.
+- CI runs on Python 3.13 as well as 3.11 and 3.12.
+
 ## 0.7.0 — 2026-08-27
 
 Ten languages — Mandarin, Hindi, Spanish, Bengali, Japanese, Russian, Turkish,

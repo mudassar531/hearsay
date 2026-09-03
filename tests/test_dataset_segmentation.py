@@ -445,3 +445,43 @@ def test_a_real_sentence_end_still_scores() -> None:
     # must leave the sentence bonus intact.
     assert _is_sentence_end("end.")
     assert not _is_sentence_end("19.8")
+
+
+@pytest.mark.parametrize(
+    ("text", "sentence", "clause"),
+    [
+        ("ہے۔", True, False),  # Urdu full stop
+        ("ہیں؟", True, False),  # Arabic question mark
+        ("है।", True, False),  # Devanagari danda
+        ("话。", True, False),  # CJK full stop
+        ("です！」", True, False),  # CJK exclamation, closed by a corner bracket
+        ("ማነው።", True, False),  # Ethiopic full stop
+        ("اور،", False, True),  # Arabic comma
+        ("然后，", False, True),  # fullwidth comma
+        ("そして、", False, True),  # CJK enumeration comma
+        ("hello", False, False),
+    ],
+)
+def test_non_ascii_marks_are_boundaries(text: str, sentence: bool, clause: bool) -> None:
+    """Both cutters share one punctuation table now; before it, a Bengali or Mandarin
+    dataset was cut on pauses and duration alone because ``।`` and ``。`` never matched."""
+    assert _is_sentence_end(text) is sentence
+    assert _is_clause_end(text) is clause
+
+
+def test_urdu_full_stop_wins_the_cut() -> None:
+    # Two candidate boundaries inside the window: after "ہے۔" (a sentence end) at 2.0 s
+    # and after a plain word at 3.0 s. The sentence bonus should decide it.
+    words = [
+        W("یہ", 0.0, 0.5),
+        W("جملہ", 0.6, 1.2),
+        W("ہے۔", 1.3, 2.0),
+        W("اگلا", 2.1, 2.6),
+        W("جملہ", 2.7, 3.0),
+        W("شروع", 3.1, 3.6),
+        W("ہوتا", 3.7, 4.2),
+        W("ہے۔", 4.3, 4.9),
+    ]
+    segs = segment_words(words, min_s=1.5, max_s=3.2)
+    assert segs[0].text.endswith("۔")
+    assert len(segs[0].words) == 3

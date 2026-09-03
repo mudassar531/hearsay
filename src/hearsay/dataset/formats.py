@@ -192,6 +192,7 @@ transcript and timing. Indexed as {", ".join(report.formats)}.
 - **title:** {meta.title}
 - **retrieval_date:** {retrieval_date}
 - **generated_by:** hearsay {version}
+- **transcription_method:** {report.method or "unknown"}
 
 ## Personal and sensitive information
 

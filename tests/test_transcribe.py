@@ -417,3 +417,133 @@ def test_auto_opens_the_large_model_for_hindi_and_bengali(
             "whisper",
             transcribe.LOW_RESOURCE_WHISPER,
         ), code
+
+
+# --- The language probe runs everywhere `auto` does --------------------------
+
+
+def test_auto_probes_the_language_without_parakeet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The probe was gated on Parakeet being installed, but it also decides whether a
+    low-resource language gets large-v3 — so on Linux, Hindi with no --lang ran through
+    whisper-small while the README said otherwise."""
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    monkeypatch.setattr(transcribe, "detect_language", lambda *a, **k: "hi")
+    seen: dict[str, str] = {}
+
+    def fake_whisper(path: Path, *, model_size: str, **kwargs: object) -> TranscriptionResult:
+        seen["model_size"] = model_size
+        return TranscriptionResult(
+            segments=[], language="hi", duration_s=1.0, model_size=model_size, method="w"
+        )
+
+    monkeypatch.setattr(transcribe, "_transcribe_whisper", fake_whisper)
+    transcribe.transcribe_audio(tmp_path / "hindi.wav", model_size="auto")
+    assert seen["model_size"] == transcribe.LOW_RESOURCE_WHISPER
+
+
+def test_decode_head_reads_only_the_first_seconds() -> None:
+    """The probe used to decode the whole file to look at 30 s of it."""
+    import numpy as np
+    from faster_whisper.audio import decode_audio
+
+    full = decode_audio(str(SAMPLE), sampling_rate=16000)
+    head = transcribe._decode_head(SAMPLE, seconds=1.0)
+    assert head.shape == (16000,) and head.dtype == np.float32
+    assert np.allclose(head, full[:16000], atol=2e-3)
+    whole = transcribe._decode_head(SAMPLE, seconds=60.0)  # longer than the clip
+    assert abs(whole.size - full.size) <= 2048  # the last frame is not split mid-frame
+
+
+# --- Models are opened once per process --------------------------------------
+
+
+def test_whisper_models_are_reused_within_a_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fifty-video playlist loaded the same checkpoint fifty times; the web UI and MCP
+    server once per request."""
+    import faster_whisper
+
+    made: list[tuple] = []
+
+    class FakeModel:
+        def __init__(self, name: str, **kwargs: object) -> None:
+            made.append((name, kwargs))
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+    monkeypatch.setenv("HEARSAY_DEVICE", "cpu")
+    transcribe._open_whisper.cache_clear()
+    try:
+        first = transcribe._load_whisper("small", local_files_only=True)
+        second = transcribe._load_whisper("small", local_files_only=True)
+        assert first is second and len(made) == 1
+        assert made[0][1] == {"device": "cpu", "compute_type": "int8", "local_files_only": True}
+    finally:
+        transcribe._open_whisper.cache_clear()  # never leak the fake into other tests
+
+
+# --- Device selection ---------------------------------------------------------
+
+
+def test_device_follows_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transcribe, "_cuda_available", lambda: False)
+    monkeypatch.delenv("HEARSAY_DEVICE", raising=False)
+    assert transcribe._device() == ("cpu", "int8")
+    monkeypatch.setattr(transcribe, "_cuda_available", lambda: True)
+    assert transcribe._device() == ("cuda", "float16")  # auto picks the GPU when there is one
+    monkeypatch.setenv("HEARSAY_DEVICE", "cpu")
+    assert transcribe._device() == ("cpu", "int8")  # an explicit choice wins
+    monkeypatch.setenv("HEARSAY_DEVICE", "CUDA")
+    assert transcribe._device() == ("cuda", "float16")
+    monkeypatch.setenv("HEARSAY_DEVICE", "tpu")
+    with pytest.raises(TranscriptionError, match="Unknown device"):
+        transcribe._device()
+
+
+# --- Dataset mode turns off Whisper's hallucination amplifiers -----------------
+
+
+class _Info:
+    duration = 1.0
+    language = "en"
+
+
+def _capturing_model(seen: dict) -> object:
+    class Model:
+        def transcribe(self, path: str, **kwargs: object) -> tuple[list, _Info]:
+            seen.update(kwargs)
+            return [], _Info()
+
+    return Model()
+
+
+def test_word_timestamps_disable_previous_text_conditioning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Conditioning each window on the previous one is what turns a music bed into
+    "Thank you for watching" repeated down the file. Dataset mode wants verbatim."""
+    seen: dict = {}
+    monkeypatch.setattr(transcribe, "_load_whisper", lambda *a, **k: _capturing_model(seen))
+    transcribe._transcribe_whisper(
+        tmp_path / "x.wav",
+        model_size="small",
+        language=None,
+        local_files_only=True,
+        vad_filter=True,
+        word_timestamps=True,
+        on_progress=None,
+    )
+    assert seen["condition_on_previous_text"] is False
+    assert seen["hallucination_silence_threshold"] == transcribe._HALLUCINATION_SILENCE_S
+    seen.clear()
+    transcribe._transcribe_whisper(
+        tmp_path / "x.wav",
+        model_size="small",
+        language=None,
+        local_files_only=True,
+        vad_filter=True,
+        word_timestamps=False,
+        on_progress=None,
+    )
+    assert seen["condition_on_previous_text"] is True  # the markdown path keeps the defaults
+    assert seen["hallucination_silence_threshold"] is None

@@ -8,6 +8,7 @@ build logic is testable offline against fixtures. Phase D4 layers batch merging
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tempfile
@@ -198,10 +199,23 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _safe_id(text: str) -> str:
-    """A filesystem-safe, collision-resistant id stem from a video id or title."""
-    cleaned = _UNSAFE.sub("-", text).strip("-")
-    return cleaned[:60] or "clip"
+def _safe_id(text: str, *, key: str | None = None) -> str:
+    """A filesystem-safe, collision-resistant id stem from a video id or title.
+
+    The slug is ASCII so every training toolchain can open the WAVs, but ASCII is lossy
+    for anything not written in Latin letters: every Urdu episode title became ``clip``,
+    the combined builder numbered them ``clip-2``, ``clip-3`` by feed order, and the
+    resume state keyed on those names handed a newly published episode another
+    episode's cached clips. So when the slug lost letters, or when the caller names what
+    the id really stands for (``key`` — a feed guid), a short digest of that identity is
+    appended. A YouTube video id is already ASCII and unique, and stays exactly as it was.
+    """
+    cleaned = _UNSAFE.sub("-", text).strip("-")[:60]
+    lossy = any(ch.isalnum() and not ch.isascii() for ch in text)
+    if key is None and not lossy:
+        return cleaned or "clip"
+    digest = hashlib.sha1((key or text).encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned or 'clip'}-{digest}"
 
 
 def _validate_formats(formats: list[str]) -> None:
@@ -273,6 +287,7 @@ def build_dataset(
         language=language,
         formats=list(config.formats),
         files=files,
+        method=transcription_method,
         clips=clips,
         dropped_count=len(drops),
         drops_by_reason=dict(Counter(d.filter for d in drops)),
@@ -340,8 +355,15 @@ def _produce_clips(
         # unverifiable end — over-running EOF would yield a short WAV whose trailing fade
         # (anchored at the requested duration) never fires, leaving the very click we add
         # the fade to remove.
-        pstart = max(0.0, start - pad)
-        pend = min(end + pad, source_duration) if source_duration > 0 else end
+        # Never pad into a neighbour either: with a 0.1 s pad and a 0.15 s gap, adjacent
+        # clips each carried a phoneme of the other's first or last word — audio their
+        # transcript does not contain. Each side gets at most half the silence between.
+        prev_end = segments[seg_index - 2].end_s if seg_index > 1 else None
+        next_start = segments[seg_index].start_s if seg_index < len(segments) else None
+        left = pad if prev_end is None else min(pad, max(0.0, (start - prev_end) / 2))
+        right = pad if next_start is None else min(pad, max(0.0, (next_start - end) / 2))
+        pstart = max(0.0, start - left)
+        pend = min(end + right, source_duration) if source_duration > 0 else end
         spans[ref] = (pstart, pend)
 
     # Tier-1 quality filters (default on). Note an "oversized" clip (longer than
@@ -745,7 +767,7 @@ def build_combined_dataset(
             results.append(SourceResult(**cached["result"]))
         else:
             try:
-                clips, drops, _meta = src.run(out_dir, config, src.source_id)
+                clips, drops, meta = src.run(out_dir, config, src.source_id)
                 result = SourceResult(
                     source_id=src.source_id,
                     label=src.label,
@@ -753,6 +775,7 @@ def build_combined_dataset(
                     clip_count=len(clips),
                     duration_s=sum(c.duration_s for c in clips),
                     dropped=len(drops),
+                    language=meta.language,
                 )
             except KeyboardInterrupt:
                 raise
@@ -771,6 +794,23 @@ def build_combined_dataset(
         all_clips.extend(clips)
         all_drops.extend(drops)
         _write_merged(out_dir, all_clips, all_drops, config.formats)  # crash-safe incremental write
+
+    # Name the language the sources were actually detected as. The card used to say
+    # "und" for every build without --lang, even when all twenty episodes came back as
+    # Urdu; a mix stays "und", and says so.
+    warnings = list(warnings or [])
+    detected = Counter(
+        r.language for r in results if r.ok and r.language and r.language != UNKNOWN_LANGUAGE
+    )
+    if language == UNKNOWN_LANGUAGE and detected:
+        if len(detected) == 1:
+            language = next(iter(detected))
+        else:
+            mix = ", ".join(f"{code} ({n})" for code, n in detected.most_common())
+            warnings.append(
+                f"sources were detected in several languages — {mix} — so the card says "
+                "'und'. Pass --lang to build a single-language dataset."
+            )
 
     # Remove orphan/stale WAVs so the on-disk tree matches the merged manifest exactly.
     # Only ids this build (or a previous run recorded in state) produced are candidates.
@@ -791,7 +831,7 @@ def build_combined_dataset(
         language=language,
         formats=list(config.formats),
         sources=results,
-        warnings=warnings or [],
+        warnings=warnings,
         succeeded=sum(1 for r in results if r.ok),
         failed=sum(1 for r in results if not r.ok),
     )
@@ -836,7 +876,7 @@ def _youtube_source(
                 config=_with_detected_language(config, result.language),
                 diarizer=diarizer,
             )
-        return clips, drops, meta
+        return clips, drops, meta.model_copy(update={"language": result.language})
 
     return DatasetSource(source_id=_safe_id(entry.video_id), label=entry.title, run=run)
 
@@ -884,10 +924,15 @@ def _episode_source(
             channel=show_title,
             duration_s=episode.duration_s or result.duration_s,
             video_id=source_id,
+            language=result.language,
         )
         return clips, drops, meta
 
-    return DatasetSource(source_id=_safe_id(episode.title), label=episode.title, run=run)
+    # The guid is the episode's identity; the title is only how it is labelled.
+    identity = episode.guid or episode.audio_url or episode.title
+    return DatasetSource(
+        source_id=_safe_id(episode.title, key=identity), label=episode.title, run=run
+    )
 
 
 def build_dataset_from_playlist(

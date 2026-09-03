@@ -8,6 +8,8 @@ markdown file; batch sources (playlists/feeds) list their items, or ingest a
 selection into an output directory.
 """
 
+import os
+import shlex
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,7 +41,7 @@ from hearsay.pipeline import (
 )
 from hearsay.render import render_markdown
 from hearsay.timefmt import format_timestamp
-from hearsay.transcribe import DEFAULT_MODEL
+from hearsay.transcribe import DEFAULT_MODEL, normalize_language
 from hearsay.youtube import (
     PlaylistEntry,
     extract_playlist_id,
@@ -69,6 +71,32 @@ class ModelSize(StrEnum):
     small = "small"
     medium = "medium"
     large_v3 = "large-v3"
+
+
+class Device(StrEnum):
+    """Where Whisper runs: ``auto`` takes CUDA when present, else the CPU."""
+
+    auto = "auto"
+    cpu = "cpu"
+    cuda = "cuda"
+
+
+_DEVICE_HELP = "Whisper device: auto (CUDA if ctranslate2 sees a GPU, else CPU), cpu, or cuda."
+_COOKIES_HELP = (
+    "Reuse a browser's YouTube login for yt-dlp (chrome, firefox, safari, edge, …) — the fix "
+    "for YouTube's \"Sign in to confirm you're not a bot\" and for age-gated videos."
+)
+
+
+def _apply_runtime(device: Device | None, cookies_from_browser: str | None) -> None:
+    """Hand --device and --cookies-from-browser down through the env vars the MCP server
+    and web UI read, so one mechanism configures every entry point."""
+    if device is not None:
+        os.environ["HEARSAY_DEVICE"] = device.value
+    if cookies_from_browser:
+        extra = os.environ.get("HEARSAY_YTDLP_ARGS", "")
+        flag = f"--cookies-from-browser {shlex.quote(cookies_from_browser)}"
+        os.environ["HEARSAY_YTDLP_ARGS"] = f"{extra} {flag}".strip()
 
 
 class DatasetFormat(StrEnum):
@@ -191,9 +219,16 @@ def mcp_command() -> None:
 def web_command(
     host: Annotated[str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8756,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Start the hearsay web UI (paste a URL or upload a file in the browser)."""
     from hearsay.webui import run_server
+
+    _apply_runtime(device, cookies_from_browser)
 
     try:
         run_server(host=host, port=port)
@@ -204,13 +239,127 @@ def web_command(
         raise typer.Exit(code=1) from exc
 
 
+@app.command(
+    "verify",
+    help="Verify a built dataset: audio/text pairing, script, clip edges, structure.",
+)
+def verify_command(
+    root: Annotated[
+        Path,
+        typer.Argument(
+            metavar="DATASET_DIR",
+            help="The folder `hearsay dataset --out` wrote.",
+            show_default=False,
+        ),
+    ],
+    sample: Annotated[
+        int, typer.Option("--sample", help="Clips to re-transcribe for the pairing check.")
+    ] = 8,
+    seed: Annotated[
+        int, typer.Option("--seed", help="Random seed for the sample, so reports reproduce.")
+    ] = 0,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model",
+            help="Model to re-transcribe with. Default: the one the card records, else auto.",
+            show_default=False,
+        ),
+    ] = None,
+    language: Annotated[
+        str | None,
+        typer.Option(
+            "--lang", help="Language code. Default: the dataset card's.", show_default=False
+        ),
+    ] = None,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+) -> None:
+    """Measure DATASET_DIR and write verification.md + verification.json into it.
+
+    Exit code: 0 trainable, 1 marginal, 2 not trainable.
+    """
+    from hearsay.dataset.verify import EXIT_CODES
+
+    _apply_runtime(device, None)
+    try:
+        result = _verify(root, sample=sample, seed=seed, model=model, language=language or None)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Interrupted.[/yellow]")
+        raise typer.Exit(code=130) from None
+    except HearsayError as exc:
+        _print_error(exc)
+        raise typer.Exit(code=1) from exc
+    raise typer.Exit(code=EXIT_CODES[result.verdict])
+
+
+def _verify(root: Path, *, sample: int, seed: int, model: str | None, language: str | None):
+    """Run the verifier under a progress bar and print its table + verdict."""
+    from hearsay.dataset.verify import verify_dataset
+
+    with _progress(f"Verifying {root.name}: re-transcribing {sample} clips") as cb:
+        result = verify_dataset(
+            root,
+            sample=sample,
+            seed=seed,
+            model_size=model,
+            language=language,
+            on_progress=lambda done, total: cb(float(done), float(total)),
+        )
+    _print_verification(result)
+    return result
+
+
+def _print_verification(v: object) -> None:
+    from hearsay.dataset.verify import MARGINAL, NOT_TRAINABLE, TRAINABLE, Verification
+
+    assert isinstance(v, Verification)
+    table = Table(title=f"hearsay verify · {Path(v.root).name}", title_style="bold")
+    table.add_column("", no_wrap=True)
+    table.add_column("check")
+    table.add_column("detail", overflow="fold")
+    for check in v.checks:
+        mark = (
+            "[green]✓[/green]"
+            if check.ok
+            else "[red]✗[/red]"
+            if check.fatal
+            else "[yellow]![/yellow]"
+        )
+        table.add_row(mark, check.name, escape(check.detail))
+    if v.pairing_gap is not None:
+        table.add_row(
+            "·",
+            "audio/text pairing",
+            f"gap {v.pairing_gap:+.2f} — self {v.pairing_mean:.2f}, control {v.control_mean:.2f} "
+            f"over {len(v.pairing)} clips re-transcribed with {escape(v.model)}",
+        )
+    else:
+        table.add_row("·", "audio/text pairing", "not measured")
+    table.add_row(
+        "·",
+        "script",
+        "n/a"
+        if v.script_share is None
+        else f"{v.script_share:.0%} in the script of '{v.language}'",
+    )
+    table.add_row(
+        "·", "clip edges", "n/a" if v.hot_edges is None else f"{v.hot_edges:.0%} cut inside speech"
+    )
+    console.print(table)
+    style = {TRAINABLE: "green", MARGINAL: "yellow", NOT_TRAINABLE: "red"}[v.verdict]
+    body = f"[bold {style}]{v.verdict.upper()}[/bold {style}]"
+    body += "".join(f"\n• {escape(reason)}" for reason in v.reasons)
+    body += f"\n→ [bold]{v.root}/verification.md[/bold]"
+    console.print(Panel.fit(body, title="verdict", border_style=style))
+
+
 @app.command("dataset", help="Build a TTS/STT training dataset from media (clips + manifests).")
 def dataset(
     source: Annotated[
         str,
         typer.Argument(
             metavar="SOURCE",
-            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
+            help="YouTube video/playlist/channel URL, any yt-dlp media URL, RSS feed, or file.",
             show_default=False,
         ),
     ],
@@ -284,8 +433,22 @@ def dataset(
     no_resume: Annotated[
         bool, typer.Option("--no-resume", help="Batch: don't reuse a previous run's clips.")
     ] = False,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="After building, re-transcribe a sample of clips and write verification.md; "
+            "the exit code follows the verdict (0 trainable, 1 marginal, 2 not).",
+        ),
+    ] = False,
 ) -> None:
     """Build a TTS/STT dataset from SOURCE into --out."""
+    _apply_runtime(device, cookies_from_browser)
     from hearsay.dataset.build import (
         build_dataset_from_feed,
         build_dataset_from_file,
@@ -379,9 +542,18 @@ def dataset(
                 ),
             )
         _print_dataset_summary(report)
+        verdict_code = 0
+        if verify:
+            from hearsay.dataset.verify import EXIT_CODES
+
+            same_model = m if m != DEFAULT_MODEL else None  # else: what the card recorded
+            result = _verify(config.out_dir, sample=8, seed=0, model=same_model, language=language)
+            verdict_code = EXIT_CODES[result.verdict]
         sources = getattr(report, "sources", None)
         if sources is not None:
             _exit_for_failures(sum(1 for s in sources if not s.ok), len(sources))
+        if verdict_code:
+            raise typer.Exit(code=verdict_code)
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130) from None
@@ -430,7 +602,7 @@ def ingest(
         str,
         typer.Argument(
             metavar="SOURCE",
-            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
+            help="YouTube video/playlist/channel URL, any yt-dlp media URL, RSS feed, or file.",
             show_default=False,
         ),
     ],
@@ -496,8 +668,14 @@ def ingest(
             "--limit", help="Batch: cap the number ingested with --all.", show_default=False
         ),
     ] = None,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
+    _apply_runtime(device, cookies_from_browser)
     opts = _Options(
         output=output,
         output_dir=output_dir,
@@ -512,6 +690,9 @@ def ingest(
         limit=limit,
     )
     try:
+        # Validate the code up front: the captions path used to take `--lang urdu`
+        # silently and hand back whatever track existed, labelled as that track.
+        opts = _Options(**{**opts.__dict__, "language": normalize_language(language)})
         path = Path(source).expanduser()
         video_id = extract_video_id(source)
         if path.is_file():
@@ -587,12 +768,21 @@ def _ingest_youtube_source(url: str, opts: _Options) -> Document:
     if opts.transcribe:
         return _transcribe_youtube(url, opts, forced=True)
     video_id = extract_video_id(url) or url
+    wanted = opts.language or "en"
     try:
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
-            return ingest_youtube(url, language=opts.language or "en")
+            document = ingest_youtube(url, language=wanted)
     except NoCaptionsError:
         console.print("[yellow]No captions found.[/yellow] Falling back to local transcription.")
         return _transcribe_youtube(url, opts, forced=False)
+    if document.language.split("-")[0] != wanted.split("-")[0]:
+        # Captions fall back to any available track rather than failing; say so, because
+        # a Spanish request that quietly came back English reads as a Spanish transcript.
+        console.print(
+            f"[yellow]No '{wanted}' captions on this video;[/yellow] used the "
+            f"'{document.language}' track. Pass --transcribe to get '{wanted}' speech-to-text."
+        )
+    return document
 
 
 def _transcribe_youtube(url: str, opts: _Options, *, forced: bool) -> Document:

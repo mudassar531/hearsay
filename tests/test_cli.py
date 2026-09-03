@@ -506,3 +506,85 @@ def test_batch_exit_code_is_0_when_everything_succeeds(
     )
     assert result.exit_code == 0, result.output
     assert len(list(out.glob("*.md"))) == 2
+
+
+# --- Runtime flags reach yt-dlp and Whisper through the shared env vars ----------
+
+
+def test_cookies_and_device_flags_set_the_shared_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HEARSAY_YTDLP_ARGS", raising=False)
+    monkeypatch.delenv("HEARSAY_DEVICE", raising=False)
+    monkeypatch.setattr(cli, "ingest_file", lambda *a, **k: _whisper_doc())
+    result = runner.invoke(
+        app,
+        [
+            str(FIXTURES / "sample.wav"),
+            "--cookies-from-browser",
+            "chrome",
+            "--device",
+            "cpu",
+            "-o",
+            str(tmp_path / "x.md"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert cli.os.environ["HEARSAY_YTDLP_ARGS"] == "--cookies-from-browser chrome"
+    assert cli.os.environ["HEARSAY_DEVICE"] == "cpu"
+
+
+# --- --lang on the captions path ---------------------------------------------------
+
+
+def test_lang_is_validated_before_captions_are_fetched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--lang urdu` used to reach the captions path, match nothing, and quietly hand back
+    whatever track existed."""
+    called = []
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: called.append(1))
+    result = runner.invoke(
+        app,
+        [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "--lang",
+            "urdu",
+            "-o",
+            str(tmp_path / "x"),
+        ],
+    )
+    assert result.exit_code == 1 and not called
+    assert "Did you mean 'ur'" in result.output
+
+
+def test_caption_language_fallback_is_announced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Captions fall back to any available track; a Spanish request that quietly came
+    back English read as a Spanish transcript."""
+    monkeypatch.setattr(cli, "ingest_youtube", lambda *a, **k: _fixture_document("rStL7niR7gs"))
+    result = runner.invoke(
+        app,
+        [
+            "https://www.youtube.com/watch?v=rStL7niR7gs",
+            "--lang",
+            "es",
+            "-o",
+            str(tmp_path / "x.md"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "No 'es' captions" in result.output and "'en' track" in result.output
+    # and nothing is said when the requested track was the one used
+    result = runner.invoke(
+        app,
+        [
+            "https://www.youtube.com/watch?v=rStL7niR7gs",
+            "--lang",
+            "en-GB",
+            "-o",
+            str(tmp_path / "y.md"),
+        ],
+    )
+    assert result.exit_code == 0 and "captions on this video" not in result.output

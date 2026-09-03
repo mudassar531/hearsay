@@ -23,6 +23,7 @@ from hearsay.pipeline import ingest_file as _ingest_file
 from hearsay.pipeline import ingest_youtube, ingest_youtube_transcribe
 from hearsay.render import render_markdown
 from hearsay.transcribe import DEFAULT_MODEL
+from hearsay.youtube import extract_video_id
 
 
 def _model() -> str:
@@ -39,9 +40,12 @@ def _vad() -> bool:
 
 
 def ingest_url_markdown(url: str, transcribe: bool = False, lang: str | None = None) -> str:
-    """Ingest a single YouTube URL and return the markdown (used by the MCP tool)."""
+    """Ingest a single media URL and return the markdown (used by the MCP tool)."""
     language = lang if lang is not None else _default_lang()
-    if transcribe:
+    # Captions are a YouTube API; every other site yt-dlp supports transcribes directly,
+    # as the CLI and web UI do. Sending a Dailymotion URL down the captions path raised
+    # "video unavailable" — not the no-captions error the fallback below listens for.
+    if transcribe or extract_video_id(url) is None:
         document = ingest_youtube_transcribe(
             url, model_size=_model(), language=language, vad_filter=_vad()
         )
@@ -91,10 +95,14 @@ def build_server():
     # in a worker thread keeps the server answering while a transcription proceeds.
     @server.tool()
     async def ingest_url(url: str, transcribe: bool = False, lang: str | None = None) -> str:
-        """Ingest a YouTube video URL into clean, timestamped, LLM-ready markdown.
+        """Ingest a video or audio URL into clean, timestamped, LLM-ready markdown.
+
+        YouTube videos use their captions when they have them (fast); every other site
+        yt-dlp supports — Dailymotion, SoundCloud, Twitch, ~1800 more — is transcribed
+        locally.
 
         Args:
-            url: A YouTube video URL.
+            url: A YouTube video URL, or any media page yt-dlp supports.
             transcribe: Force local Whisper transcription instead of captions.
             lang: Preferred language code (captions default to English).
         """

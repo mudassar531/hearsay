@@ -30,15 +30,15 @@ from __future__ import annotations
 import re
 
 from hearsay.models import Paragraph, Segment
+from hearsay.punctuation import CLAUSE_END, ELLIPSIS_END, SENTENCE_END
 
 # --- Boundary punctuation -------------------------------------------------
 
-# An ellipsis ending: a soft trailing-off, scored between clause and sentence.
-_ELLIPSIS_END = re.compile(r"(?:\.\.\.|…)[\"“”‘’')\]]*$")
-# A sentence-final mark, optionally followed by closing quotes/brackets.
-_SENTENCE_END = re.compile(r"[.!?][\"“”‘’')\]]*$")
-# A clause-final mark (weaker, but still better than mid-phrase).
-_CLAUSE_END = re.compile(r"[,;:—–][\"“”‘’')\]]*$")
+# Sentence/clause/ellipsis endings live in hearsay.punctuation: one table covering
+# Latin, Arabic-script, Indic, CJK and more, shared with the clip segmenter.
+_ELLIPSIS_END = ELLIPSIS_END
+_SENTENCE_END = SENTENCE_END
+_CLAUSE_END = CLAUSE_END
 # A trailing period on these tokens is an abbreviation, not a full stop.
 _ABBREVIATIONS = frozenset(
     {

@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from hearsay.errors import PlaylistError
+from hearsay.errors import PlaylistError, VideoUnavailableError
 from hearsay.youtube import (
+    _map_ytdlp_error,
     _pick_downloaded_audio,
     extract_playlist_id,
     extract_video_id,
@@ -157,3 +158,80 @@ def test_parse_playlist_json_fixture() -> None:
 def test_parse_playlist_json_empty_raises() -> None:
     with pytest.raises(PlaylistError):
         parse_playlist_json({"title": "Empty", "entries": []}, "url")
+
+
+# --- Channels are batch sources too -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/@CGPGrey", "@CGPGrey"),
+        ("https://www.youtube.com/@CGPGrey/videos", "@CGPGrey"),
+        ("https://youtube.com/@mr.beast/shorts", "@mr.beast"),
+        ("https://www.youtube.com/channel/UC2C_jShtL725hvbm1arSV9w", "UC2C_jShtL725hvbm1arSV9w"),
+        (
+            "https://www.youtube.com/channel/UC2C_jShtL725hvbm1arSV9w/videos",
+            "UC2C_jShtL725hvbm1arSV9w",
+        ),
+        ("https://www.youtube.com/c/CGPGrey", "CGPGrey"),
+        ("https://m.youtube.com/user/CGPGrey/videos", "CGPGrey"),
+        ("https://www.youtube.com/@CGPGrey/playlists", None),  # lists playlists, not videos
+        ("https://www.youtube.com/@CGPGrey/about", None),
+        ("https://www.youtube.com/@", None),
+        ("https://example.com/@CGPGrey", None),  # not a YouTube host
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None),
+    ],
+)
+def test_channel_urls_are_batch_sources(url: str, expected: str | None) -> None:
+    """A channel URL used to fall through to the single-video path, where yt-dlp tried
+    to dump every video's metadata and hit the 60 s timeout with a network hint."""
+    assert extract_playlist_id(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # A bare channel page lists its *tabs* as nested playlists; the Videos tab lists videos.
+        ("https://www.youtube.com/@CGPGrey", "https://www.youtube.com/@CGPGrey/videos"),
+        ("https://www.youtube.com/@CGPGrey/", "https://www.youtube.com/@CGPGrey/videos"),
+        (
+            "https://www.youtube.com/channel/UCabc?view=0",
+            "https://www.youtube.com/channel/UCabc/videos",
+        ),
+        ("https://www.youtube.com/@CGPGrey/streams", "https://www.youtube.com/@CGPGrey/streams"),
+        (
+            "https://www.youtube.com/playlist?list=PLabc",
+            "https://www.youtube.com/playlist?list=PLabc",
+        ),
+        ("https://example.com/feed.xml", "https://example.com/feed.xml"),
+    ],
+)
+def test_listing_url_targets_the_videos_tab(url: str, expected: str) -> None:
+    from hearsay.youtube import listing_url
+
+    assert listing_url(url) == expected
+
+
+# --- yt-dlp passthrough and YouTube's bot check --------------------------------
+
+
+def test_ytdlp_args_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hearsay.youtube import _ytdlp
+
+    monkeypatch.delenv("HEARSAY_YTDLP_ARGS", raising=False)
+    assert _ytdlp("--", "u")[-2:] == ["--", "u"]
+    monkeypatch.setenv("HEARSAY_YTDLP_ARGS", "--cookies-from-browser 'fire fox' --proxy x")
+    argv = _ytdlp("-J", "--", "u")
+    assert argv[3:] == ["--cookies-from-browser", "fire fox", "--proxy", "x", "-J", "--", "u"]
+
+
+def test_bot_check_names_the_cookies_flag() -> None:
+    """The most common failure today; "update yt-dlp" was the wrong advice for it."""
+    stderr = (
+        "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you’re not a bot. "
+        "Use --cookies-from-browser or --cookies for the authentication."
+    )
+    err = _map_ytdlp_error("https://youtu.be/dQw4w9WgXcQ", stderr)
+    assert isinstance(err, VideoUnavailableError)
+    assert "bot check" in err.message and "--cookies-from-browser" in err.hint
