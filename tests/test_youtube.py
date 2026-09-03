@@ -157,3 +157,56 @@ def test_parse_playlist_json_fixture() -> None:
 def test_parse_playlist_json_empty_raises() -> None:
     with pytest.raises(PlaylistError):
         parse_playlist_json({"title": "Empty", "entries": []}, "url")
+
+
+# --- Channels are batch sources too -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/@CGPGrey", "@CGPGrey"),
+        ("https://www.youtube.com/@CGPGrey/videos", "@CGPGrey"),
+        ("https://youtube.com/@mr.beast/shorts", "@mr.beast"),
+        ("https://www.youtube.com/channel/UC2C_jShtL725hvbm1arSV9w", "UC2C_jShtL725hvbm1arSV9w"),
+        (
+            "https://www.youtube.com/channel/UC2C_jShtL725hvbm1arSV9w/videos",
+            "UC2C_jShtL725hvbm1arSV9w",
+        ),
+        ("https://www.youtube.com/c/CGPGrey", "CGPGrey"),
+        ("https://m.youtube.com/user/CGPGrey/videos", "CGPGrey"),
+        ("https://www.youtube.com/@CGPGrey/playlists", None),  # lists playlists, not videos
+        ("https://www.youtube.com/@CGPGrey/about", None),
+        ("https://www.youtube.com/@", None),
+        ("https://example.com/@CGPGrey", None),  # not a YouTube host
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None),
+    ],
+)
+def test_channel_urls_are_batch_sources(url: str, expected: str | None) -> None:
+    """A channel URL used to fall through to the single-video path, where yt-dlp tried
+    to dump every video's metadata and hit the 60 s timeout with a network hint."""
+    assert extract_playlist_id(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # A bare channel page lists its *tabs* as nested playlists; the Videos tab lists videos.
+        ("https://www.youtube.com/@CGPGrey", "https://www.youtube.com/@CGPGrey/videos"),
+        ("https://www.youtube.com/@CGPGrey/", "https://www.youtube.com/@CGPGrey/videos"),
+        (
+            "https://www.youtube.com/channel/UCabc?view=0",
+            "https://www.youtube.com/channel/UCabc/videos",
+        ),
+        ("https://www.youtube.com/@CGPGrey/streams", "https://www.youtube.com/@CGPGrey/streams"),
+        (
+            "https://www.youtube.com/playlist?list=PLabc",
+            "https://www.youtube.com/playlist?list=PLabc",
+        ),
+        ("https://example.com/feed.xml", "https://example.com/feed.xml"),
+    ],
+)
+def test_listing_url_targets_the_videos_tab(url: str, expected: str) -> None:
+    from hearsay.youtube import listing_url
+
+    assert listing_url(url) == expected

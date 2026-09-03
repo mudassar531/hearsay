@@ -54,10 +54,17 @@ def _valid_id(candidate: str) -> str | None:
 
 
 _METADATA_TIMEOUT_S = 60
+# Listing is a flat metadata pass, but a channel can hold thousands of videos.
+_PLAYLIST_TIMEOUT_S = 300
 _DOWNLOAD_TIMEOUT_S = 600
 
 
 _PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+# Channel pages: /@handle, /channel/UC…, /c/Name, /user/Name — optionally followed by a
+# tab that lists videos. Handles may contain periods.
+_CHANNEL_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
+_CHANNEL_PREFIXES = frozenset({"channel", "c", "user"})
+_CHANNEL_TABS = frozenset({"videos", "streams", "shorts"})
 
 
 class PlaylistEntry(NamedTuple):
@@ -94,24 +101,67 @@ def extract_video_id(url: str) -> str | None:
 
 
 def extract_playlist_id(url: str) -> str | None:
-    """Return the playlist id from a canonical /playlist?list=... URL, else None.
+    """Return the id of a batch source — a playlist, or a channel — else None.
 
-    The path must be exactly ``/playlist`` (parsed, not substring-matched), so a
-    ``watch?v=...&list=...`` URL — or a watch URL with ``/playlist`` buried in a
-    query param — is treated as a single video and ingests just that video.
+    A playlist is a canonical ``/playlist?list=...`` URL: the path must be exactly
+    ``/playlist`` (parsed, not substring-matched), so a ``watch?v=...&list=...`` URL —
+    or a watch URL with ``/playlist`` buried in a query param — is treated as a single
+    video and ingests just that video. A channel is ``/@handle``, ``/channel/UC…``,
+    ``/c/Name`` or ``/user/Name`` on a YouTube host, optionally with a video-listing
+    tab; its handle or id is returned. Channels used to fall through to the
+    single-video path, where yt-dlp tried to dump every video and timed out.
     """
     parsed = urlparse(url)
-    if parsed.path.rstrip("/") != "/playlist":
+    if parsed.path.rstrip("/") == "/playlist":
+        values = parse_qs(parsed.query).get("list")
+        if not values:
+            return None
+        candidate = values[0]
+        return candidate if _PLAYLIST_ID.match(candidate) else None
+    return _channel_key(url)
+
+
+def _channel_key(url: str) -> str | None:
+    """The handle or id of a YouTube channel URL, or None if ``url`` is not one."""
+    resolved = _canonical_host(url)
+    if resolved is None:
         return None
-    values = parse_qs(parsed.query).get("list")
-    if not values:
+    host, parsed = resolved
+    if host not in _YOUTUBE_HOSTS:
         return None
-    candidate = values[0]
-    return candidate if _PLAYLIST_ID.match(candidate) else None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments:
+        return None
+    if segments[0].startswith("@") and len(segments[0]) > 1:
+        key, rest = segments[0], segments[1:]
+    elif segments[0] in _CHANNEL_PREFIXES and len(segments) >= 2:
+        key, rest = segments[1], segments[2:]
+    else:
+        return None
+    if rest and (len(rest) > 1 or rest[0] not in _CHANNEL_TABS):
+        return None  # /playlists, /about, /community … list something other than videos
+    return key if _CHANNEL_KEY.match(key.lstrip("@")) else None
+
+
+def listing_url(url: str) -> str:
+    """The URL to hand yt-dlp when listing ``url``: a bare channel page becomes its Videos tab.
+
+    ``--flat-playlist`` on a channel *root* returns the channel's tabs (Videos, Shorts,
+    Live) as nested playlists whose ids are not video ids; the Videos tab lists videos.
+    """
+    resolved = _canonical_host(url)
+    if resolved is None or _channel_key(url) is None:
+        return url
+    _host, parsed = resolved
+    segments = [s for s in parsed.path.split("/") if s]
+    if segments[-1] in _CHANNEL_TABS:
+        return url
+    path = "/" + "/".join([*segments, "videos"])
+    return parsed._replace(path=path, query="", fragment="").geturl()
 
 
 def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:
-    """List a playlist's entries via `yt-dlp --flat-playlist` (no per-video fetch).
+    """List a playlist's or channel's entries via `yt-dlp --flat-playlist` (no per-video fetch).
 
     Returns (playlist_title, entries). Raises PlaylistError on failure.
     """
@@ -125,17 +175,17 @@ def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:
                 "--flat-playlist",
                 "--no-warnings",
                 "--",
-                url,
+                listing_url(url),
             ],
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=_METADATA_TIMEOUT_S,
+            timeout=_PLAYLIST_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         raise PlaylistError(
-            f"Timed out listing playlist {url} after {_METADATA_TIMEOUT_S}s.",
+            f"Timed out listing playlist {url} after {_PLAYLIST_TIMEOUT_S}s.",
             hint="Check your network connection and try again.",
         ) from None
     if proc.returncode != 0:
