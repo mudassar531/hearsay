@@ -72,7 +72,7 @@ def test_server_exposes_both_tools() -> None:
 def test_ingest_url_markdown_uses_captions(monkeypatch: pytest.MonkeyPatch) -> None:
     # Tool logic without a real model: captions path returns rendered markdown.
     monkeypatch.setattr(mcp_server, "ingest_youtube", lambda url, language: _doc())
-    markdown = ingest_url_markdown("https://youtu.be/x")
+    markdown = ingest_url_markdown("https://youtu.be/dQw4w9WgXcQ")
     assert markdown.startswith("---")
     assert "# clip" in markdown
 
@@ -89,7 +89,7 @@ def test_ingest_url_markdown_falls_back_to_transcribe(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(mcp_server, "ingest_youtube", no_captions)
     monkeypatch.setattr(mcp_server, "ingest_youtube_transcribe", fake_transcribe)
-    markdown = ingest_url_markdown("https://youtu.be/x")
+    markdown = ingest_url_markdown("https://youtu.be/dQw4w9WgXcQ")
     assert fell_back["yes"] is True
     assert "whisper-small" in markdown
 
@@ -103,7 +103,7 @@ def test_ingest_url_markdown_transcribe_flag(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setenv("HEARSAY_MODEL", "tiny")
     monkeypatch.setattr(mcp_server, "ingest_youtube_transcribe", fake_transcribe)
-    markdown = ingest_url_markdown("https://youtu.be/x", transcribe=True)
+    markdown = ingest_url_markdown("https://youtu.be/dQw4w9WgXcQ", transcribe=True)
     assert captured["model"] == "tiny"  # HEARSAY_MODEL env is honored
     assert markdown.startswith("---")
 
@@ -192,3 +192,25 @@ def test_tools_do_not_block_the_event_loop() -> None:
     finally:
         mcp_server.ingest_file_markdown = original
     assert ticks > 5, f"event loop was blocked during the tool call (only {ticks} ticks)"
+
+
+def test_ingest_url_transcribes_non_youtube_sites(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI and web UI send any yt-dlp site straight to transcription; the MCP tool
+    went through the captions path and surfaced "video unavailable" instead."""
+    calls: list[str] = []
+
+    def captions(*args: object, **kwargs: object) -> Document:
+        calls.append("captions")
+        return _doc()
+
+    def transcribe(*args: object, **kwargs: object) -> Document:
+        calls.append("transcribe")
+        return _doc()
+
+    monkeypatch.setattr(mcp_server, "ingest_youtube", captions)
+    monkeypatch.setattr(mcp_server, "ingest_youtube_transcribe", transcribe)
+    ingest_url_markdown("https://www.dailymotion.com/video/x8abcde")
+    assert calls == ["transcribe"]
+    calls.clear()
+    ingest_url_markdown("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    assert calls == ["captions"]
