@@ -199,7 +199,10 @@ def test_cli_verify_prints_a_verdict_and_exits_by_it(
     monkeypatch.setattr(transcribe, "transcribe_audio", _echo_transcriber(tmp_path, rows))
     result = CliRunner().invoke(app, ["verify", str(tmp_path), "--sample", "3"])
     assert result.exit_code == 0, result.output
-    assert "TRAINABLE" in result.output and "verification.md" in result.output
+    assert "TRAINABLE" in result.output
+    # The panel names the report path, but rich folds a long tmp path mid-word at 80
+    # columns (CI), so check the file rather than grep a wrapped line.
+    assert (tmp_path / "verification.md").exists()
     monkeypatch.setattr(transcribe, "transcribe_audio", _echo_transcriber(tmp_path, rows, shift=1))
     result = CliRunner().invoke(app, ["verify", str(tmp_path), "--sample", "5"])
     assert result.exit_code == 2, result.output
