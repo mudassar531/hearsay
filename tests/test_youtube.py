@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from hearsay.errors import PlaylistError
+from hearsay.errors import PlaylistError, VideoUnavailableError
 from hearsay.youtube import (
+    _map_ytdlp_error,
     _pick_downloaded_audio,
     extract_playlist_id,
     extract_video_id,
@@ -210,3 +211,27 @@ def test_listing_url_targets_the_videos_tab(url: str, expected: str) -> None:
     from hearsay.youtube import listing_url
 
     assert listing_url(url) == expected
+
+
+# --- yt-dlp passthrough and YouTube's bot check --------------------------------
+
+
+def test_ytdlp_args_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hearsay.youtube import _ytdlp
+
+    monkeypatch.delenv("HEARSAY_YTDLP_ARGS", raising=False)
+    assert _ytdlp("--", "u")[-2:] == ["--", "u"]
+    monkeypatch.setenv("HEARSAY_YTDLP_ARGS", "--cookies-from-browser 'fire fox' --proxy x")
+    argv = _ytdlp("-J", "--", "u")
+    assert argv[3:] == ["--cookies-from-browser", "fire fox", "--proxy", "x", "-J", "--", "u"]
+
+
+def test_bot_check_names_the_cookies_flag() -> None:
+    """The most common failure today; "update yt-dlp" was the wrong advice for it."""
+    stderr = (
+        "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you’re not a bot. "
+        "Use --cookies-from-browser or --cookies for the authentication."
+    )
+    err = _map_ytdlp_error("https://youtu.be/dQw4w9WgXcQ", stderr)
+    assert isinstance(err, VideoUnavailableError)
+    assert "bot check" in err.message and "--cookies-from-browser" in err.hint

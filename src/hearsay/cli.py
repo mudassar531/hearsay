@@ -9,6 +9,7 @@ selection into an output directory.
 """
 
 import os
+import shlex
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ from hearsay.pipeline import (
 )
 from hearsay.render import render_markdown
 from hearsay.timefmt import format_timestamp
-from hearsay.transcribe import DEFAULT_MODEL
+from hearsay.transcribe import DEFAULT_MODEL, normalize_language
 from hearsay.youtube import (
     PlaylistEntry,
     extract_playlist_id,
@@ -81,12 +82,21 @@ class Device(StrEnum):
 
 
 _DEVICE_HELP = "Whisper device: auto (CUDA if ctranslate2 sees a GPU, else CPU), cpu, or cuda."
+_COOKIES_HELP = (
+    "Reuse a browser's YouTube login for yt-dlp (chrome, firefox, safari, edge, …) — the fix "
+    "for YouTube's \"Sign in to confirm you're not a bot\" and for age-gated videos."
+)
 
 
-def _apply_device(device: Device | None) -> None:
-    """Hand --device to the transcriber through the env var the MCP server also reads."""
+def _apply_runtime(device: Device | None, cookies_from_browser: str | None) -> None:
+    """Hand --device and --cookies-from-browser down through the env vars the MCP server
+    and web UI read, so one mechanism configures every entry point."""
     if device is not None:
         os.environ["HEARSAY_DEVICE"] = device.value
+    if cookies_from_browser:
+        extra = os.environ.get("HEARSAY_YTDLP_ARGS", "")
+        flag = f"--cookies-from-browser {shlex.quote(cookies_from_browser)}"
+        os.environ["HEARSAY_YTDLP_ARGS"] = f"{extra} {flag}".strip()
 
 
 class DatasetFormat(StrEnum):
@@ -210,11 +220,15 @@ def web_command(
     host: Annotated[str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8756,
     device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Start the hearsay web UI (paste a URL or upload a file in the browser)."""
     from hearsay.webui import run_server
 
-    _apply_device(device)
+    _apply_runtime(device, cookies_from_browser)
 
     try:
         run_server(host=host, port=port)
@@ -306,9 +320,13 @@ def dataset(
         bool, typer.Option("--no-resume", help="Batch: don't reuse a previous run's clips.")
     ] = False,
     device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Build a TTS/STT dataset from SOURCE into --out."""
-    _apply_device(device)
+    _apply_runtime(device, cookies_from_browser)
     from hearsay.dataset.build import (
         build_dataset_from_feed,
         build_dataset_from_file,
@@ -520,9 +538,13 @@ def ingest(
         ),
     ] = None,
     device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+    cookies_from_browser: Annotated[
+        str | None,
+        typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
-    _apply_device(device)
+    _apply_runtime(device, cookies_from_browser)
     opts = _Options(
         output=output,
         output_dir=output_dir,
@@ -537,6 +559,9 @@ def ingest(
         limit=limit,
     )
     try:
+        # Validate the code up front: the captions path used to take `--lang urdu`
+        # silently and hand back whatever track existed, labelled as that track.
+        opts = _Options(**{**opts.__dict__, "language": normalize_language(language)})
         path = Path(source).expanduser()
         video_id = extract_video_id(source)
         if path.is_file():
@@ -612,12 +637,21 @@ def _ingest_youtube_source(url: str, opts: _Options) -> Document:
     if opts.transcribe:
         return _transcribe_youtube(url, opts, forced=True)
     video_id = extract_video_id(url) or url
+    wanted = opts.language or "en"
     try:
         with console.status(f"[bold]Fetching captions for {video_id}…", spinner="dots"):
-            return ingest_youtube(url, language=opts.language or "en")
+            document = ingest_youtube(url, language=wanted)
     except NoCaptionsError:
         console.print("[yellow]No captions found.[/yellow] Falling back to local transcription.")
         return _transcribe_youtube(url, opts, forced=False)
+    if document.language.split("-")[0] != wanted.split("-")[0]:
+        # Captions fall back to any available track rather than failing; say so, because
+        # a Spanish request that quietly came back English reads as a Spanish transcript.
+        console.print(
+            f"[yellow]No '{wanted}' captions on this video;[/yellow] used the "
+            f"'{document.language}' track. Pass --transcribe to get '{wanted}' speech-to-text."
+        )
+    return document
 
 
 def _transcribe_youtube(url: str, opts: _Options, *, forced: bool) -> Document:

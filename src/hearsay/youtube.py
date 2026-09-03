@@ -1,7 +1,9 @@
 """YouTube URL parsing and metadata fetching via yt-dlp (no media download)."""
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +67,19 @@ _PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _CHANNEL_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
 _CHANNEL_PREFIXES = frozenset({"channel", "c", "user"})
 _CHANNEL_TABS = frozenset({"videos", "streams", "shorts"})
+
+
+def _ytdlp(*args: str) -> list[str]:
+    """The yt-dlp command line: the interpreter's module, ``HEARSAY_YTDLP_ARGS``, then ``args``.
+
+    ``HEARSAY_YTDLP_ARGS`` is a shell-quoted string of extra yt-dlp flags, applied to every
+    yt-dlp call hearsay makes. Its main use is ``--cookies-from-browser chrome`` (the CLI's
+    ``--cookies-from-browser`` sets it): YouTube increasingly answers anonymous requests
+    with "Sign in to confirm you're not a bot", and a signed-in browser's cookies are the
+    fix yt-dlp documents. Kept as an env var so the MCP server and web UI get it too.
+    """
+    extra = shlex.split(os.environ.get("HEARSAY_YTDLP_ARGS", ""))
+    return [sys.executable, "-m", "yt_dlp", *extra, *args]
 
 
 class PlaylistEntry(NamedTuple):
@@ -167,16 +182,7 @@ def fetch_playlist(url: str) -> tuple[str, list[PlaylistEntry]]:
     """
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
-                "-J",
-                "--flat-playlist",
-                "--no-warnings",
-                "--",
-                listing_url(url),
-            ],
+            _ytdlp("-J", "--flat-playlist", "--no-warnings", "--", listing_url(url)),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -231,16 +237,7 @@ def fetch_raw_metadata(url: str) -> dict:
     """
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
-                "--dump-json",
-                "--no-warnings",
-                "--no-playlist",
-                "--",
-                url,
-            ],
+            _ytdlp("--dump-json", "--no-warnings", "--no-playlist", "--", url),
             capture_output=True,
             text=True,
             encoding="utf-8",  # yt-dlp emits UTF-8 JSON; do not trust the locale
@@ -280,7 +277,16 @@ def _map_ytdlp_error(url: str, stderr: str) -> HearsayError:
     if "age" in lowered and "confirm" in lowered:
         return VideoUnavailableError(
             f"This video is age-restricted and cannot be fetched anonymously: {url}",
-            hint="Try a video that does not require sign-in.",
+            hint="Pass --cookies-from-browser chrome (or firefox, safari, edge) so yt-dlp "
+            "reuses a signed-in browser's YouTube session, or try a video without a gate.",
+        )
+    if "not a bot" in lowered or "sign in to confirm" in lowered:
+        # The most common real-world failure today, and "update yt-dlp" is the wrong advice.
+        return VideoUnavailableError(
+            f"YouTube wants a signed-in session before it will serve {url} (its bot check).",
+            hint="Pass --cookies-from-browser chrome (or firefox, safari, edge) so yt-dlp "
+            "reuses your browser's YouTube login. For the web UI or MCP server, set "
+            "HEARSAY_YTDLP_ARGS='--cookies-from-browser chrome' instead.",
         )
     if "is not a valid url" in lowered or "unsupported url" in lowered:
         return InvalidSourceError(
@@ -306,10 +312,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     out_template = str(dest_dir / "%(id)s.%(ext)s")
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "yt_dlp",
+            _ytdlp(
                 "-f",
                 "bestaudio[ext=m4a]/bestaudio/best",
                 "--no-playlist",
@@ -318,7 +321,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
                 out_template,
                 "--",
                 url,
-            ],
+            ),
             capture_output=True,
             text=True,
             encoding="utf-8",

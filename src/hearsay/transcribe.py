@@ -745,7 +745,7 @@ def _transcribe_whisper(
         words = words_from_whisper(raw_words)
     return TranscriptionResult(
         segments=segments,
-        language=info.language or "en",
+        language=info.language or UNKNOWN_LANGUAGE,  # never claim English it did not detect
         duration_s=float(info.duration),
         model_size=model_size,
         method=f"whisper-{model_size}",
