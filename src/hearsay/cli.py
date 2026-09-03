@@ -8,6 +8,7 @@ markdown file; batch sources (playlists/feeds) list their items, or ingest a
 selection into an output directory.
 """
 
+import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -69,6 +70,23 @@ class ModelSize(StrEnum):
     small = "small"
     medium = "medium"
     large_v3 = "large-v3"
+
+
+class Device(StrEnum):
+    """Where Whisper runs: ``auto`` takes CUDA when present, else the CPU."""
+
+    auto = "auto"
+    cpu = "cpu"
+    cuda = "cuda"
+
+
+_DEVICE_HELP = "Whisper device: auto (CUDA if ctranslate2 sees a GPU, else CPU), cpu, or cuda."
+
+
+def _apply_device(device: Device | None) -> None:
+    """Hand --device to the transcriber through the env var the MCP server also reads."""
+    if device is not None:
+        os.environ["HEARSAY_DEVICE"] = device.value
 
 
 class DatasetFormat(StrEnum):
@@ -191,9 +209,12 @@ def mcp_command() -> None:
 def web_command(
     host: Annotated[str, typer.Option("--host", help="Address to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8756,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
 ) -> None:
     """Start the hearsay web UI (paste a URL or upload a file in the browser)."""
     from hearsay.webui import run_server
+
+    _apply_device(device)
 
     try:
         run_server(host=host, port=port)
@@ -284,8 +305,10 @@ def dataset(
     no_resume: Annotated[
         bool, typer.Option("--no-resume", help="Batch: don't reuse a previous run's clips.")
     ] = False,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
 ) -> None:
     """Build a TTS/STT dataset from SOURCE into --out."""
+    _apply_device(device)
     from hearsay.dataset.build import (
         build_dataset_from_feed,
         build_dataset_from_file,
@@ -496,8 +519,10 @@ def ingest(
             "--limit", help="Batch: cap the number ingested with --all.", show_default=False
         ),
     ] = None,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
 ) -> None:
     """Ingest SOURCE into timestamped, LLM-ready markdown."""
+    _apply_device(device)
     opts = _Options(
         output=output,
         output_dir=output_dir,

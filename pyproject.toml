@@ -137,7 +137,7 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 # These third-party deps ship no type stubs or py.typed marker (pyannote is an
 # optional extra and is not installed in the dev/test environment at all).
-module = ["faster_whisper.*", "feedparser.*", "parakeet_mlx.*", "pyannote.*"]
+module = ["ctranslate2.*", "faster_whisper.*", "feedparser.*", "parakeet_mlx.*", "pyannote.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

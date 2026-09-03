@@ -17,8 +17,10 @@ path, and the engine you are not using, never pay the (heavy, slow) import cost.
 """
 
 import os
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -192,6 +194,14 @@ UNKNOWN_LANGUAGE = "und"
 # Long files are transcribed in overlapping windows so progress can be reported
 # and memory stays bounded; shorter files run in a single pass.
 _PARAKEET_CHUNK_S = 120.0
+# In dataset mode, a silence longer than this inside a Whisper window is where a
+# hallucinated line would land; faster-whisper skips it when word timestamps are on.
+_HALLUCINATION_SILENCE_S = 2.0
+# One transcription at a time per process. The web UI and MCP server take requests on
+# threads, and two decodes at once double the model memory (large-v3 is ~1.5 GB int8)
+# while gaining nothing on a CPU the first already saturates.
+# ponytail: global lock; a semaphore sized to the GPU if a CUDA box wants lanes.
+_ENGINE_LOCK = threading.Lock()
 
 # Reports (processed_seconds, total_seconds) as transcription advances.
 ProgressCallback = Callable[[float, float], None]
@@ -261,45 +271,46 @@ def transcribe_audio(
     # to run only when Parakeet was installed, so a Linux box put Hindi and Bengali
     # through whisper-small while the README promised large-v3.
     language = normalize_language(language)
-    detected: str | None = None
-    if model_size == "auto" and language is None:
-        detected = detect_language(path, local_files_only=local_files_only)
-        # Parakeet cannot detect at all, so there it *is* the label; Whisper re-detects.
-    engine, identifier = _resolve_engine(model_size, language or detected)
-    if engine == "parakeet":
-        try:
-            return _transcribe_parakeet(
-                path,
-                repo_id=identifier,
-                language=language,
-                local_files_only=local_files_only,
-                word_timestamps=word_timestamps,
-                on_progress=on_progress,
-            )
-        except TranscriptionError:
-            # `auto` promises "the fastest engine that works here", so a Parakeet that
-            # is importable but cannot actually run (no network for the ~2.5 GB weights,
-            # a corrupt cache, an MLX/OS mismatch) must fall through to Whisper rather
-            # than leave the machine with no transcription at all. An explicitly named
-            # engine still fails loudly — a deliberate choice is never downgraded.
-            if model_size != "auto":
-                raise
-            identifier = DEFAULT_WHISPER
-    return _transcribe_whisper(
-        path,
-        model_size=identifier,
-        prompt=prompt,
-        # Deliberately NOT `language or detected`: the probe runs on the *tiny*
-        # checkpoint and only has to be right enough to pick an engine. Whisper detects
-        # again during the real decode with the model actually being used, which is
-        # strictly better — forcing the probe's guess turned a Cyrillic Uzbek news
-        # bulletin (mis-guessed as Persian) into Arabic-script nonsense.
-        language=language,
-        local_files_only=local_files_only,
-        vad_filter=vad_filter,
-        word_timestamps=word_timestamps,
-        on_progress=on_progress,
-    )
+    with _ENGINE_LOCK:
+        detected: str | None = None
+        if model_size == "auto" and language is None:
+            detected = detect_language(path, local_files_only=local_files_only)
+            # Parakeet cannot detect at all, so there it *is* the label; Whisper re-detects.
+        engine, identifier = _resolve_engine(model_size, language or detected)
+        if engine == "parakeet":
+            try:
+                return _transcribe_parakeet(
+                    path,
+                    repo_id=identifier,
+                    language=language,
+                    local_files_only=local_files_only,
+                    word_timestamps=word_timestamps,
+                    on_progress=on_progress,
+                )
+            except TranscriptionError:
+                # `auto` promises "the fastest engine that works here", so a Parakeet that
+                # is importable but cannot actually run (no network for the ~2.5 GB weights,
+                # a corrupt cache, an MLX/OS mismatch) must fall through to Whisper rather
+                # than leave the machine with no transcription at all. An explicitly named
+                # engine still fails loudly — a deliberate choice is never downgraded.
+                if model_size != "auto":
+                    raise
+                identifier = DEFAULT_WHISPER
+        return _transcribe_whisper(
+            path,
+            model_size=identifier,
+            prompt=prompt,
+            # Deliberately NOT `language or detected`: the probe runs on the *tiny*
+            # checkpoint and only has to be right enough to pick an engine. Whisper detects
+            # again during the real decode with the model actually being used, which is
+            # strictly better — forcing the probe's guess turned a Cyrillic Uzbek news
+            # bulletin (mis-guessed as Persian) into Arabic-script nonsense.
+            language=language,
+            local_files_only=local_files_only,
+            vad_filter=vad_filter,
+            word_timestamps=word_timestamps,
+            on_progress=on_progress,
+        )
 
 
 def detect_language(path: Path, *, local_files_only: bool = False) -> str | None:
@@ -466,6 +477,34 @@ def resolve_method(model_size: str) -> str:
     return identifier.split("/")[-1] if engine == "parakeet" else f"whisper-{identifier}"
 
 
+def _device() -> tuple[str, str]:
+    """``(device, compute_type)`` for CTranslate2, from ``HEARSAY_DEVICE``: auto | cpu | cuda.
+
+    ``auto`` (the default) takes CUDA when ctranslate2 can see a GPU and CPU otherwise;
+    float16 on a GPU, int8 on a CPU — faster-whisper's usual pairing. Whisper used to be
+    pinned to the CPU even on a machine with a GPU sitting idle.
+    """
+    want = (os.environ.get("HEARSAY_DEVICE") or "auto").strip().lower()
+    if want == "auto":
+        want = "cuda" if _cuda_available() else "cpu"
+    if want == "cuda":
+        return "cuda", "float16"
+    if want == "cpu":
+        return "cpu", "int8"
+    raise TranscriptionError(
+        f"Unknown device {want!r}.", hint="HEARSAY_DEVICE (or --device) takes auto, cpu or cuda."
+    )
+
+
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+
+        return int(ctranslate2.get_cuda_device_count()) > 0
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _parakeet_available() -> bool:
     """True when parakeet-mlx can be imported (Apple Silicon + extra installed)."""
     from importlib.util import find_spec
@@ -551,8 +590,9 @@ def _transcribe_parakeet(
     )
 
 
+@lru_cache(maxsize=1)
 def _load_parakeet(repo_id: str, *, local_files_only: bool):
-    """Load a Parakeet MLX model, mapping failures to friendly errors."""
+    """Load a Parakeet MLX model once per process, mapping failures to friendly errors."""
     try:
         from parakeet_mlx import from_pretrained
     except ImportError as exc:
@@ -668,6 +708,13 @@ def _transcribe_whisper(
             vad_filter=vad_filter,
             word_timestamps=word_timestamps,
             initial_prompt=prompt,
+            # Dataset mode wants verbatim, not fluent. Conditioning each window on the
+            # previous one is what turns a stretch of music or silence into "Thank you
+            # for watching" repeated down the rest of the file, and the silence
+            # threshold lets the word-timestamp pass skip the gaps where a hallucinated
+            # line would land. The markdown path keeps Whisper's defaults.
+            condition_on_previous_text=not word_timestamps,
+            hallucination_silence_threshold=_HALLUCINATION_SILENCE_S if word_timestamps else None,
         )
         for seg in segment_iter:
             raw.append((seg.text, seg.start, seg.end))
@@ -707,7 +754,17 @@ def _transcribe_whisper(
 
 
 def _load_whisper(model_size: str, *, local_files_only: bool):
-    """Load a faster-whisper model on CPU, mapping failures to friendly errors."""
+    """Load a faster-whisper model, mapping failures to friendly errors.
+
+    Models live for the life of the process: a fifty-video playlist used to load the
+    same checkpoint fifty times, and the web UI and MCP server once per request.
+    """
+    device, compute_type = _device()
+    return _open_whisper(model_size, local_files_only, device, compute_type)
+
+
+@lru_cache(maxsize=2)  # the tiny probe model plus the one doing the work
+def _open_whisper(model_size: str, local_files_only: bool, device: str, compute_type: str):
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:  # pragma: no cover - dependency is declared
@@ -719,8 +776,8 @@ def _load_whisper(model_size: str, *, local_files_only: bool):
     try:
         return WhisperModel(
             model_size,
-            device="cpu",
-            compute_type="int8",
+            device=device,
+            compute_type=compute_type,
             local_files_only=local_files_only,
         )
     except Exception as exc:
