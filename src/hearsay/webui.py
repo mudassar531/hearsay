@@ -13,7 +13,6 @@ sidestepping multipart parsing (and ``cgi``, which is gone in Python 3.13).
 History lives entirely in the browser (localStorage); the server is stateless.
 """
 
-import base64
 import io
 import ipaddress
 import json
@@ -174,9 +173,14 @@ def _zip_dir(root: Path) -> bytes:
     return buf.getvalue()
 
 
-def _dataset_payload(out_dir: Path, report: object) -> dict:
-    """Shape a build report + the zipped dataset into the JSON the page downloads."""
-    return {
+def _dataset_payload(out_dir: Path, report: object) -> tuple[dict, bytes]:
+    """Shape a build report into the JSON the page shows, plus the zipped dataset bytes.
+
+    The zip used to travel base64-encoded inside the JSON: an hour of 22 kHz audio is
+    ~160 MB of WAV, which became a 213 MB string the browser had to decode with atob.
+    It is now the response body itself, streamed as a file, with the report in a header.
+    """
+    summary = {
         "ok": True,
         "dataset": True,
         "clips": report.clip_count,  # type: ignore[attr-defined]
@@ -184,8 +188,8 @@ def _dataset_payload(out_dir: Path, report: object) -> dict:
         "dropped": report.dropped_count,  # type: ignore[attr-defined]
         "warnings": report.warnings,  # type: ignore[attr-defined]
         "zip_name": f"{out_dir.name}.zip",
-        "zip_b64": base64.b64encode(_zip_dir(out_dir)).decode("ascii"),
     }
+    return summary, _zip_dir(out_dir)
 
 
 def _dataset_config(out_dir: Path, opts: dict):
@@ -246,7 +250,7 @@ def require_fetchable_url(url: str) -> str:
     return url
 
 
-def build_url_dataset(url: str, *, opts: dict) -> dict:
+def build_url_dataset(url: str, *, opts: dict) -> tuple[dict, bytes]:
     """Build a dataset from any media URL — video, playlist, or podcast feed.
 
     Playlists and feeds merge into one dataset, exactly as the CLI does. Single media
@@ -297,7 +301,7 @@ def _batch_limit(opts: dict) -> int:
     return max(1, min(requested, 25))
 
 
-def build_file_dataset(name: str, data: bytes, *, opts: dict) -> dict:
+def build_file_dataset(name: str, data: bytes, *, opts: dict) -> tuple[dict, bytes]:
     """Build a dataset from an uploaded file and return a zip payload."""
     from hearsay.dataset.build import build_dataset_from_file
 
@@ -363,9 +367,11 @@ class _Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/file":
                 payload = _document_payload(self._handle_file(parse_qs(parsed.query)))
             elif parsed.path == "/api/dataset":
-                payload = self._handle_dataset_url()
+                self._send_zip(*self._handle_dataset_url())
+                return
             elif parsed.path == "/api/dataset-file":
-                payload = self._handle_dataset_file(parse_qs(parsed.query))
+                self._send_zip(*self._handle_dataset_file(parse_qs(parsed.query)))
+                return
             else:
                 self._send_json({"ok": False, "error": "Not found."}, status=404)
                 return
@@ -415,8 +421,21 @@ class _Handler(BaseHTTPRequestHandler):
             remaining -= len(chunk)
         return b"".join(chunks)
 
+    def _read_json(self) -> dict:
+        try:
+            body = json.loads(self._read_body() or b"{}")
+        except ValueError as exc:  # a malformed body is the client's mistake, not a 500
+            raise InvalidSourceError(
+                "The request body is not valid JSON.", hint="Send a JSON object with a url."
+            ) from exc
+        if not isinstance(body, dict):
+            raise InvalidSourceError(
+                "The request body must be a JSON object.", hint="Send a JSON object with a url."
+            )
+        return body
+
     def _handle_url(self) -> Document:
-        body = json.loads(self._read_body() or b"{}")
+        body = self._read_json()
         return process_url(
             str(body.get("url", "")),
             transcribe=bool(body.get("transcribe", False)),
@@ -435,11 +454,11 @@ class _Handler(BaseHTTPRequestHandler):
         vad = (query.get("vad") or ["1"])[0] != "0"
         return process_file(name, data, model=model, language=lang, vad=vad)
 
-    def _handle_dataset_url(self) -> dict:
-        body = json.loads(self._read_body() or b"{}")
+    def _handle_dataset_url(self) -> tuple[dict, bytes]:
+        body = self._read_json()
         return build_url_dataset(str(body.get("url", "")), opts=body)
 
-    def _handle_dataset_file(self, query: dict[str, list[str]]) -> dict:
+    def _handle_dataset_file(self, query: dict[str, list[str]]) -> tuple[dict, bytes]:
         data = self._read_body()
         if not data:
             raise InvalidSourceError("No file received.", hint="Choose an audio/video file.")
@@ -463,6 +482,16 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_zip(self, summary: dict, data: bytes) -> None:
+        """Send a dataset zip as a file download; the build summary rides in a header."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f'attachment; filename="{summary["zip_name"]}"')
+        self.send_header("X-Hearsay-Report", json.dumps(summary))  # ASCII-escaped by default
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _send_html(self, html: str) -> None:
         body = html.encode("utf-8")
@@ -924,13 +953,11 @@ function openItem(item){
 function newChat(){ pickedFile=null; updChip(); $('#input').value=''; autoGrow(); showHero(); }
 $('#new').onclick=newChat;
 
-function downloadZip(b64, name){
-  const bin=atob(b64); const arr=new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr],{type:'application/zip'}));
+function downloadZip(blob, name){
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download=name||'hearsay-dataset.zip'; a.click(); URL.revokeObjectURL(a.href);
 }
-function datasetNode(d){
+function datasetNode(d, blob){
   const wrap=document.createElement('div'); wrap.className='doc';
   const warns=(d.warnings||[]).map(w=>'<p style="color:var(--accent)">! '+esc(w)+'</p>').join('');
   wrap.innerHTML='<div class="doc-head"><div class="meta">'+
@@ -939,7 +966,7 @@ function datasetNode(d){
     '<span>dropped <b>'+d.dropped+'</b></span></div>'+
     '<div class="doc-actions"><button data-a="dl">Download .zip</button></div></div>'+
     '<div class="doc-body"><div class="md"><p>Dataset ready — the .zip download should have started.</p>'+warns+'</div></div>';
-  wrap.querySelector('[data-a=dl]').onclick=()=>downloadZip(d.zip_b64,d.zip_name);
+  wrap.querySelector('[data-a=dl]').onclick=()=>downloadZip(blob,d.zip_name);
   return wrap;
 }
 
@@ -969,11 +996,11 @@ async function submit(){
         res=await fetch('/api/dataset',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({url:text,...ds})});
       }
-      const d=await res.json();
-      if(!d.ok) throw new Error((d.error||'Failed')+(d.hint?'\nTry: '+d.hint:''));
-      downloadZip(d.zip_b64,d.zip_name);
+      if(!res.ok){ const e=await res.json(); throw new Error((e.error||'Failed')+(e.hint?'\nTry: '+e.hint:'')); }
+      const d=JSON.parse(res.headers.get('X-Hearsay-Report')||'{}'), blob=await res.blob();
+      downloadZip(blob,d.zip_name);
       stopThinking(thinking);
-      thinking.querySelector('.body').innerHTML=''; thinking.querySelector('.body').appendChild(datasetNode(d));
+      thinking.querySelector('.body').innerHTML=''; thinking.querySelector('.body').appendChild(datasetNode(d,blob));
       $('#topTitle').textContent='Dataset · '+d.clips+' clips';
       return;  // datasets aren't added to history (not re-openable as markdown)
     }

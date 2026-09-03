@@ -5,7 +5,6 @@ The server runs on an ephemeral loopback port; the build_dataset_from_* function
 a tiny dataset and return a report — so no transcription/network happens.
 """
 
-import base64
 import http.client
 import io
 import json
@@ -67,8 +66,23 @@ def _fake_build(captured: dict):
     return fake
 
 
-def _zip_names(zip_b64: str) -> list[str]:
-    raw = base64.b64decode(zip_b64)
+def _post_zip(
+    addr: str, path: str, body: bytes, ctype: str = "application/json"
+) -> tuple[dict, bytes]:
+    """POST and return ``(report, zip_bytes)`` from a dataset response (a file, not JSON)."""
+    conn = http.client.HTTPConnection(addr, timeout=5)
+    conn.request("POST", path, body=body, headers={"Content-Type": ctype})
+    resp = conn.getresponse()
+    assert resp.status == 200, resp.read()
+    assert resp.getheader("Content-Type") == "application/zip"
+    assert resp.getheader("Content-Disposition", "").startswith("attachment;")
+    report = json.loads(resp.getheader("X-Hearsay-Report") or "{}")
+    data = resp.read()
+    conn.close()
+    return report, data
+
+
+def _zip_names(raw: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
         return zf.namelist()
 
@@ -84,11 +98,11 @@ def test_dataset_url_builds_and_returns_zip(server: str, monkeypatch: pytest.Mon
             "segment_max": 8,
         }
     ).encode()
-    status, data = _post(server, "/api/dataset", body)
-    assert status == 200 and data["dataset"] is True
+    data, raw = _post_zip(server, "/api/dataset", body)
+    assert data["dataset"] is True
     assert data["clips"] == 2 and data["dropped"] == 0
     assert data["warnings"] == ["a heads-up"]
-    assert "manifest.jsonl" in _zip_names(data["zip_b64"])  # a real, loadable zip
+    assert "manifest.jsonl" in _zip_names(raw)  # a real, loadable zip, sent as a file
     # the request options reached the build config
     assert captured["config"].sample_rate == 16000
     assert captured["config"].segment_min_s == 2.0 and captured["config"].segment_max_s == 8.0
@@ -106,8 +120,8 @@ def test_dataset_url_builds_a_playlist(server: str, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(ds_build, "build_dataset_from_playlist", fake_playlist)
     body = json.dumps({"url": "https://www.youtube.com/playlist?list=PL1234567890"}).encode()
-    status, data = _post(server, "/api/dataset", body)
-    assert status == 200 and data["dataset"] is True
+    data, _raw = _post_zip(server, "/api/dataset", body)
+    assert data["dataset"] is True
     assert captured["url"].endswith("list=PL1234567890")
     assert captured["limit"] == 5  # default browser cap
 
@@ -120,14 +134,14 @@ def test_dataset_url_rejects_empty(server: str) -> None:
 def test_dataset_file_builds_and_returns_zip(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     monkeypatch.setattr(ds_build, "build_dataset_from_file", _fake_build(captured))
-    status, data = _post(
+    data, raw = _post_zip(
         server,
         "/api/dataset-file?name=clip.wav&sample_rate=22050&segment_min=1&segment_max=15",
         b"fake-audio-bytes",
         ctype="audio/wav",
     )
-    assert status == 200 and data["dataset"] is True
-    assert "manifest.jsonl" in _zip_names(data["zip_b64"])
+    assert data["dataset"] is True
+    assert "manifest.jsonl" in _zip_names(raw)
     assert captured["config"].sample_rate == 22050
 
 
@@ -160,7 +174,7 @@ def test_dataset_no_temp_leak(server: str, monkeypatch: pytest.MonkeyPatch, tmp_
 
     monkeypatch.setattr(ds_build, "build_dataset_from_media_url", _fake_build({}))
     before = set(Path(tempfile.gettempdir()).glob("hearsay-web-ds-*"))
-    _post(
+    _post_zip(
         server,
         "/api/dataset",
         json.dumps({"url": "https://www.youtube.com/watch?v=abcdefghijk"}).encode(),
@@ -173,5 +187,12 @@ def test_zip_dir_roundtrip(tmp_path: Path) -> None:
     (tmp_path / "wavs").mkdir()
     (tmp_path / "wavs" / "a.wav").write_bytes(b"RIFF....")
     (tmp_path / "metadata.csv").write_text("id|t|t\n")
-    names = _zip_names(base64.b64encode(webui._zip_dir(tmp_path)).decode())
+    names = _zip_names(webui._zip_dir(tmp_path))
     assert set(names) == {"wavs/a.wav", "metadata.csv"}
+
+
+def test_malformed_json_body_is_a_400(server: str) -> None:
+    status, data = _post(server, "/api/dataset", b"{not json")
+    assert status == 400 and "JSON" in data["error"]
+    status, data = _post(server, "/api/url", b"[1, 2]")
+    assert status == 400 and data["hint"]
