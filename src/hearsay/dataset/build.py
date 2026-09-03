@@ -354,8 +354,15 @@ def _produce_clips(
         # unverifiable end — over-running EOF would yield a short WAV whose trailing fade
         # (anchored at the requested duration) never fires, leaving the very click we add
         # the fade to remove.
-        pstart = max(0.0, start - pad)
-        pend = min(end + pad, source_duration) if source_duration > 0 else end
+        # Never pad into a neighbour either: with a 0.1 s pad and a 0.15 s gap, adjacent
+        # clips each carried a phoneme of the other's first or last word — audio their
+        # transcript does not contain. Each side gets at most half the silence between.
+        prev_end = segments[seg_index - 2].end_s if seg_index > 1 else None
+        next_start = segments[seg_index].start_s if seg_index < len(segments) else None
+        left = pad if prev_end is None else min(pad, max(0.0, (start - prev_end) / 2))
+        right = pad if next_start is None else min(pad, max(0.0, (next_start - end) / 2))
+        pstart = max(0.0, start - left)
+        pend = min(end + right, source_duration) if source_duration > 0 else end
         spans[ref] = (pstart, pend)
 
     # Tier-1 quality filters (default on). Note an "oversized" clip (longer than
