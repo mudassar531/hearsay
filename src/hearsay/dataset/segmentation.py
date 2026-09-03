@@ -40,12 +40,13 @@ from collections.abc import Iterable
 
 from hearsay.dataset.models import DatasetSegment
 from hearsay.models import Word
+from hearsay.punctuation import CLAUSE_END, ELLIPSIS_END, SENTENCE_END
 
-# --- Boundary punctuation (mirrors grouping.py; dataset mode is independent of
-#     the markdown grouper, so these are intentionally redeclared, not imported). ---
-_SENTENCE_END = re.compile(r"[.!?][\"“”‘’')\]]*$")
-_CLAUSE_END = re.compile(r"[,;:—–][\"“”‘’')\]]*$")
-_ELLIPSIS_END = re.compile(r"(?:\.\.\.|…)[\"“”‘’')\]]*$")
+# --- Boundary punctuation (shared with grouping.py via hearsay.punctuation, so an
+#     Urdu ``۔`` or a Chinese ``。`` counts as a sentence end in both cutters). ---
+_SENTENCE_END = SENTENCE_END
+_CLAUSE_END = CLAUSE_END
+_ELLIPSIS_END = ELLIPSIS_END
 _ABBREVIATIONS = frozenset(
     {
         "mr.", "mrs.", "ms.", "dr.", "st.", "vs.", "etc.", "e.g.", "i.e.",
@@ -55,8 +56,8 @@ _ABBREVIATIONS = frozenset(
 _DOTTED_INITIAL = re.compile(r"^(?:[a-z]\.)+$")
 _MIDDLE_INITIAL = re.compile(r"^[a-z]\.$")  # "J." — a name initial, not a full stop
 _DECIMAL = re.compile(r"\d\.\d")  # "3.14" — the dot is not a sentence end
-_OPEN_QUOTES = "\"“”‘’'(["
-_CLOSE_QUOTES = "\"“”‘’')]"
+_OPEN_QUOTES = "\"“”‘’'([「『《〈【"
+_CLOSE_QUOTES = "\"“”‘’')]」』》〉】"
 
 # --- Word cues (mirror grouping.py) ---------------------------------------
 _DANGLING_WORDS = frozenset(
