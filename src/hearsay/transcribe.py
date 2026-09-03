@@ -253,13 +253,16 @@ def transcribe_audio(
             offline, or Parakeet requested but not installed) or the file could
             not be decoded.
     """
-    # With no stated language, `auto` cannot know whether Parakeet can read this audio.
+    # With no stated language, `auto` cannot know whether Parakeet can read this audio,
+    # nor whether the language is one stock `small` mangles and `large-v3` should take.
     # Identify it first with the smallest Whisper checkpoint (one window, ~40 MB) —
     # otherwise a Naat, a Quran recitation, or any Hindi/Chinese/Japanese recording comes
-    # back as confident Latin nonsense that no downstream check can spot.
+    # back as confident Latin nonsense that no downstream check can spot. The probe used
+    # to run only when Parakeet was installed, so a Linux box put Hindi and Bengali
+    # through whisper-small while the README promised large-v3.
     language = normalize_language(language)
     detected: str | None = None
-    if model_size == "auto" and language is None and _parakeet_available():
+    if model_size == "auto" and language is None:
         detected = detect_language(path, local_files_only=local_files_only)
         # Parakeet cannot detect at all, so there it *is* the label; Whisper re-detects.
     engine, identifier = _resolve_engine(model_size, language or detected)
@@ -307,15 +310,43 @@ def detect_language(path: Path, *, local_files_only: bool = False) -> str | None
     caller falls back to its normal default.
     """
     try:
-        from faster_whisper.audio import decode_audio
-
         model = _load_whisper(_DETECT_WHISPER, local_files_only=local_files_only)
-        language, probability, _ = model.detect_language(
-            audio=decode_audio(str(path), sampling_rate=16000)
-        )
+        language, probability, _ = model.detect_language(audio=_decode_head(path))
     except Exception:  # a probe is an optimisation, never a reason to fail the job
         return None
     return language if probability >= _DETECT_MIN_PROBABILITY else None
+
+
+# Whisper identifies the language from one 30 s window; decoding more is waste.
+_PROBE_SECONDS = 30.0
+
+
+def _decode_head(path: Path, *, seconds: float = _PROBE_SECONDS, sample_rate: int = 16000):
+    """Decode only the first ``seconds`` of ``path`` to mono float32 at ``sample_rate``.
+
+    faster-whisper's ``decode_audio`` reads the whole file — about 700 MB of float32 for
+    a three-hour podcast — to feed a probe that looks at 30 seconds of it, and the real
+    decode then reads it all again. Stop after the head instead.
+    """
+    import av
+    import numpy as np
+
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=sample_rate)
+    want = int(seconds * sample_rate)
+    chunks: list = []
+    got = 0
+    with av.open(str(path), metadata_errors="ignore") as container:
+        for frame in container.decode(audio=0):
+            frame.pts = None
+            for out in resampler.resample(frame):
+                arr = out.to_ndarray().reshape(-1)
+                chunks.append(arr)
+                got += arr.size
+            if got >= want:
+                break
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks)[:want].astype(np.float32) / 32768.0
 
 
 # A language written in more than one script comes back in whichever the decoder

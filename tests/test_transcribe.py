@@ -417,3 +417,40 @@ def test_auto_opens_the_large_model_for_hindi_and_bengali(
             "whisper",
             transcribe.LOW_RESOURCE_WHISPER,
         ), code
+
+
+# --- The language probe runs everywhere `auto` does --------------------------
+
+
+def test_auto_probes_the_language_without_parakeet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The probe was gated on Parakeet being installed, but it also decides whether a
+    low-resource language gets large-v3 — so on Linux, Hindi with no --lang ran through
+    whisper-small while the README said otherwise."""
+    monkeypatch.setattr(transcribe, "_parakeet_available", lambda: False)
+    monkeypatch.setattr(transcribe, "detect_language", lambda *a, **k: "hi")
+    seen: dict[str, str] = {}
+
+    def fake_whisper(path: Path, *, model_size: str, **kwargs: object) -> TranscriptionResult:
+        seen["model_size"] = model_size
+        return TranscriptionResult(
+            segments=[], language="hi", duration_s=1.0, model_size=model_size, method="w"
+        )
+
+    monkeypatch.setattr(transcribe, "_transcribe_whisper", fake_whisper)
+    transcribe.transcribe_audio(tmp_path / "hindi.wav", model_size="auto")
+    assert seen["model_size"] == transcribe.LOW_RESOURCE_WHISPER
+
+
+def test_decode_head_reads_only_the_first_seconds() -> None:
+    """The probe used to decode the whole file to look at 30 s of it."""
+    import numpy as np
+    from faster_whisper.audio import decode_audio
+
+    full = decode_audio(str(SAMPLE), sampling_rate=16000)
+    head = transcribe._decode_head(SAMPLE, seconds=1.0)
+    assert head.shape == (16000,) and head.dtype == np.float32
+    assert np.allclose(head, full[:16000], atol=2e-3)
+    whole = transcribe._decode_head(SAMPLE, seconds=60.0)  # longer than the clip
+    assert abs(whole.size - full.size) <= 2048  # the last frame is not split mid-frame
