@@ -431,3 +431,49 @@ def test_well_served_languages_are_not_warned_about(tmp_path: Path) -> None:
         transcription_method="whisper-small",
     )
     assert not any("cannot really transcribe" in w for w in report.warnings)
+
+
+# --- Source ids keep their identity across scripts and runs -----------------
+
+
+def test_safe_id_keeps_ascii_video_ids_verbatim() -> None:
+    from hearsay.dataset.build import _safe_id
+
+    assert _safe_id("dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert _safe_id("Episode 12: Hello") == "Episode-12-Hello"
+
+
+def test_safe_id_distinguishes_non_latin_titles() -> None:
+    """Every Urdu, Bengali or Chinese title used to slug to the same ``clip``; the
+    combined builder then numbered them by feed order, and a resumed build re-used
+    the wrong episode's clips once a new one was published."""
+    from hearsay.dataset.build import _safe_id
+
+    urdu_1, urdu_2 = _safe_id("اردو پوڈکاسٹ پہلی قسط"), _safe_id("اردو پوڈکاسٹ دوسری قسط")
+    assert urdu_1 != urdu_2
+    assert urdu_1.startswith("clip-") and urdu_1 == _safe_id("اردو پوڈکاسٹ پہلی قسط")  # stable
+    assert _safe_id("বাংলা সংবাদ") != _safe_id("第一集")
+    assert all(ch.isascii() for ch in urdu_1)  # still a filename every toolchain opens
+
+
+def test_episode_source_id_comes_from_the_guid() -> None:
+    from hearsay.dataset.build import _episode_source
+    from hearsay.feeds import Episode
+
+    def make(guid: str):
+        ep = Episode(
+            title="Weekly show", audio_url=f"https://x/{guid}.mp3", duration_s=1, guid=guid
+        )
+        return _episode_source(
+            ep,
+            "Show",
+            model_size="tiny",
+            language=None,
+            vad_filter=True,
+            episode_downloader=lambda url, dest: dest,  # never called: only the id is inspected
+            transcriber=lambda *a, **k: None,  # type: ignore[arg-type]
+        )
+
+    a, b = make("guid-a"), make("guid-b")
+    assert a.source_id != b.source_id  # same title, different episodes
+    assert a.source_id == make("guid-a").source_id  # and stable across runs

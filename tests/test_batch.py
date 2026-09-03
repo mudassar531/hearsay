@@ -123,3 +123,10 @@ def test_slugify() -> None:
     assert slugify("", fallback="ep-7") == "ep-7"
     assert slugify("!!!", fallback="ep-7") == "ep-7"
     assert len(slugify("x" * 200)) <= 80
+
+
+def test_slugify_keeps_combining_marks() -> None:
+    # ``\\w`` dropped the vowel signs of abugida scripts, mangling the title.
+    assert slugify("বাংলা সংবাদ") == "বাংলা-সংবাদ"
+    assert slugify("اردو پوڈکاسٹ") == "اردو-پوڈکاسٹ"
+    assert slugify("Hello, World!") == "hello-world"  # unchanged for Latin

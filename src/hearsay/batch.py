@@ -6,6 +6,7 @@ offline without touching the network.
 """
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,8 +14,13 @@ from pathlib import Path
 from hearsay.errors import InvalidSourceError
 from hearsay.models import Document
 
-_SLUG_STRIP = re.compile(r"[^\w\s-]")
 _SLUG_SPACES = re.compile(r"[\s_-]+")
+
+
+def _slug_char(ch: str) -> bool:
+    # ``\w`` drops combining marks, and an abugida title without its vowel signs is a
+    # different word: "বাংলা সংবাদ" came out as "বল-সবদ". Marks (category M*) stay.
+    return ch.isalnum() or ch.isspace() or ch in "-_" or unicodedata.category(ch)[0] == "M"
 
 
 @dataclass
@@ -38,7 +44,7 @@ class BatchResult:
 
 def slugify(text: str, *, fallback: str = "episode") -> str:
     """Turn a title into a filesystem-safe, lowercase, hyphenated stem."""
-    cleaned = _SLUG_STRIP.sub("", text).strip().lower()
+    cleaned = "".join(ch for ch in text if _slug_char(ch)).strip().lower()
     slug = _SLUG_SPACES.sub("-", cleaned).strip("-")
     return (slug or fallback)[:80]
 

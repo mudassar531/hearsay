@@ -8,6 +8,7 @@ build logic is testable offline against fixtures. Phase D4 layers batch merging
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tempfile
@@ -198,10 +199,23 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _safe_id(text: str) -> str:
-    """A filesystem-safe, collision-resistant id stem from a video id or title."""
-    cleaned = _UNSAFE.sub("-", text).strip("-")
-    return cleaned[:60] or "clip"
+def _safe_id(text: str, *, key: str | None = None) -> str:
+    """A filesystem-safe, collision-resistant id stem from a video id or title.
+
+    The slug is ASCII so every training toolchain can open the WAVs, but ASCII is lossy
+    for anything not written in Latin letters: every Urdu episode title became ``clip``,
+    the combined builder numbered them ``clip-2``, ``clip-3`` by feed order, and the
+    resume state keyed on those names handed a newly published episode another
+    episode's cached clips. So when the slug lost letters, or when the caller names what
+    the id really stands for (``key`` — a feed guid), a short digest of that identity is
+    appended. A YouTube video id is already ASCII and unique, and stays exactly as it was.
+    """
+    cleaned = _UNSAFE.sub("-", text).strip("-")[:60]
+    lossy = any(ch.isalnum() and not ch.isascii() for ch in text)
+    if key is None and not lossy:
+        return cleaned or "clip"
+    digest = hashlib.sha1((key or text).encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned or 'clip'}-{digest}"
 
 
 def _validate_formats(formats: list[str]) -> None:
@@ -887,7 +901,11 @@ def _episode_source(
         )
         return clips, drops, meta
 
-    return DatasetSource(source_id=_safe_id(episode.title), label=episode.title, run=run)
+    # The guid is the episode's identity; the title is only how it is labelled.
+    identity = episode.guid or episode.audio_url or episode.title
+    return DatasetSource(
+        source_id=_safe_id(episode.title, key=identity), label=episode.title, run=run
+    )
 
 
 def build_dataset_from_playlist(
