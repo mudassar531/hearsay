@@ -314,8 +314,8 @@ def test_a_playlist_without_lang_is_not_labelled_english(tmp_path: Path) -> None
     `--lang` was omitted. Each source detects its own language for the filters, but
     the combined card never saw it, so every playlist built without `--lang` asserted
     English in its HuggingFace YAML front matter regardless of what was in the audio.
-    "und" (ISO 639-2 undetermined) is what hearsay already uses elsewhere for exactly
-    this, and unlike "en" it is not a false claim.
+    0.7.0 made that "und"; 0.8.0 carries each source's detected language up, so a
+    playlist whose sources all came back Mandarin now says so, and only a mix is "und".
     """
     entries = [PlaylistEntry(video_id="vidA", title="Vid A", url="https://yt/a")]
 
@@ -337,5 +337,58 @@ def test_a_playlist_without_lang_is_not_labelled_english(tmp_path: Path) -> None
         audio_downloader=lambda url, dest: SAMPLE,
         transcriber=fake_transcribe,
     )
-    assert report.language == "und"
-    assert 'language:\n- "und"' in (tmp_path / "dataset_card.md").read_text(encoding="utf-8")
+    assert report.language == "zh"  # what was detected — never a language nobody detected
+    assert 'language:\n- "zh"' in (tmp_path / "dataset_card.md").read_text(encoding="utf-8")
+
+
+# --- The combined card names the language its sources were detected as -----------
+
+
+def _silent_source(sid: str, language: str | None):
+    from hearsay.dataset.build import DatasetSource
+    from hearsay.models import SourceMetadata
+
+    def run(out_dir, config, source_id):
+        meta = SourceMetadata(
+            title=sid,
+            source=f"src://{sid}",
+            channel="c",
+            duration_s=1.0,
+            video_id=sid,
+            language=language,
+        )
+        return [], [], meta
+
+    return DatasetSource(source_id=sid, label=sid, run=run)
+
+
+def test_combined_card_takes_the_unanimous_detected_language(tmp_path: Path) -> None:
+    """Every build without --lang said "und", even when all its episodes came back Urdu."""
+    from hearsay.transcribe import UNKNOWN_LANGUAGE
+
+    sources = [_silent_source("a", "ur"), _silent_source("b", "ur")]
+    report = build_combined_dataset(
+        sources, _config(tmp_path), title="Show", source="s", language=UNKNOWN_LANGUAGE
+    )
+    assert report.language == "ur"
+    assert report.sources[0].language == "ur"  # carried in the state for resumed runs too
+    assert 'language:\n- "ur"' in (tmp_path / "dataset_card.md").read_text()
+
+
+def test_combined_card_keeps_und_for_a_mix_and_says_so(tmp_path: Path) -> None:
+    from hearsay.transcribe import UNKNOWN_LANGUAGE
+
+    sources = [_silent_source("a", "ur"), _silent_source("b", "hi"), _silent_source("c", "ur")]
+    report = build_combined_dataset(
+        sources, _config(tmp_path), title="Show", source="s", language=UNKNOWN_LANGUAGE
+    )
+    assert report.language == UNKNOWN_LANGUAGE
+    assert any("ur (2)" in w and "hi (1)" in w for w in report.warnings)
+
+
+def test_combined_card_respects_an_explicit_language(tmp_path: Path) -> None:
+    sources = [_silent_source("a", "hi")]
+    report = build_combined_dataset(
+        sources, _config(tmp_path), title="S", source="s", language="ur"
+    )
+    assert report.language == "ur"  # the user said so; detection does not override a flag

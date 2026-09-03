@@ -766,7 +766,7 @@ def build_combined_dataset(
             results.append(SourceResult(**cached["result"]))
         else:
             try:
-                clips, drops, _meta = src.run(out_dir, config, src.source_id)
+                clips, drops, meta = src.run(out_dir, config, src.source_id)
                 result = SourceResult(
                     source_id=src.source_id,
                     label=src.label,
@@ -774,6 +774,7 @@ def build_combined_dataset(
                     clip_count=len(clips),
                     duration_s=sum(c.duration_s for c in clips),
                     dropped=len(drops),
+                    language=meta.language,
                 )
             except KeyboardInterrupt:
                 raise
@@ -792,6 +793,23 @@ def build_combined_dataset(
         all_clips.extend(clips)
         all_drops.extend(drops)
         _write_merged(out_dir, all_clips, all_drops, config.formats)  # crash-safe incremental write
+
+    # Name the language the sources were actually detected as. The card used to say
+    # "und" for every build without --lang, even when all twenty episodes came back as
+    # Urdu; a mix stays "und", and says so.
+    warnings = list(warnings or [])
+    detected = Counter(
+        r.language for r in results if r.ok and r.language and r.language != UNKNOWN_LANGUAGE
+    )
+    if language == UNKNOWN_LANGUAGE and detected:
+        if len(detected) == 1:
+            language = next(iter(detected))
+        else:
+            mix = ", ".join(f"{code} ({n})" for code, n in detected.most_common())
+            warnings.append(
+                f"sources were detected in several languages — {mix} — so the card says "
+                "'und'. Pass --lang to build a single-language dataset."
+            )
 
     # Remove orphan/stale WAVs so the on-disk tree matches the merged manifest exactly.
     # Only ids this build (or a previous run recorded in state) produced are candidates.
@@ -812,7 +830,7 @@ def build_combined_dataset(
         language=language,
         formats=list(config.formats),
         sources=results,
-        warnings=warnings or [],
+        warnings=warnings,
         succeeded=sum(1 for r in results if r.ok),
         failed=sum(1 for r in results if not r.ok),
     )
@@ -857,7 +875,7 @@ def _youtube_source(
                 config=_with_detected_language(config, result.language),
                 diarizer=diarizer,
             )
-        return clips, drops, meta
+        return clips, drops, meta.model_copy(update={"language": result.language})
 
     return DatasetSource(source_id=_safe_id(entry.video_id), label=entry.title, run=run)
 
@@ -905,6 +923,7 @@ def _episode_source(
             channel=show_title,
             duration_s=episode.duration_s or result.duration_s,
             video_id=source_id,
+            language=result.language,
         )
         return clips, drops, meta
 

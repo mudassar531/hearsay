@@ -194,6 +194,7 @@ class SourceResult(BaseModel):
     duration_s: float = 0.0
     dropped: int = 0
     error: str | None = None
+    language: str | None = None  # what transcription detected, so resume keeps it too
 
 
 class CombinedReport(BaseModel):
