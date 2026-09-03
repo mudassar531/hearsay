@@ -239,6 +239,120 @@ def web_command(
         raise typer.Exit(code=1) from exc
 
 
+@app.command(
+    "verify",
+    help="Verify a built dataset: audio/text pairing, script, clip edges, structure.",
+)
+def verify_command(
+    root: Annotated[
+        Path,
+        typer.Argument(
+            metavar="DATASET_DIR",
+            help="The folder `hearsay dataset --out` wrote.",
+            show_default=False,
+        ),
+    ],
+    sample: Annotated[
+        int, typer.Option("--sample", help="Clips to re-transcribe for the pairing check.")
+    ] = 8,
+    seed: Annotated[
+        int, typer.Option("--seed", help="Random seed for the sample, so reports reproduce.")
+    ] = 0,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model",
+            help="Model to re-transcribe with. Default: the one the card records, else auto.",
+            show_default=False,
+        ),
+    ] = None,
+    language: Annotated[
+        str | None,
+        typer.Option(
+            "--lang", help="Language code. Default: the dataset card's.", show_default=False
+        ),
+    ] = None,
+    device: Annotated[Device | None, typer.Option("--device", help=_DEVICE_HELP)] = None,
+) -> None:
+    """Measure DATASET_DIR and write verification.md + verification.json into it.
+
+    Exit code: 0 trainable, 1 marginal, 2 not trainable.
+    """
+    from hearsay.dataset.verify import EXIT_CODES
+
+    _apply_runtime(device, None)
+    try:
+        result = _verify(root, sample=sample, seed=seed, model=model, language=language or None)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Interrupted.[/yellow]")
+        raise typer.Exit(code=130) from None
+    except HearsayError as exc:
+        _print_error(exc)
+        raise typer.Exit(code=1) from exc
+    raise typer.Exit(code=EXIT_CODES[result.verdict])
+
+
+def _verify(root: Path, *, sample: int, seed: int, model: str | None, language: str | None):
+    """Run the verifier under a progress bar and print its table + verdict."""
+    from hearsay.dataset.verify import verify_dataset
+
+    with _progress(f"Verifying {root.name}: re-transcribing {sample} clips") as cb:
+        result = verify_dataset(
+            root,
+            sample=sample,
+            seed=seed,
+            model_size=model,
+            language=language,
+            on_progress=lambda done, total: cb(float(done), float(total)),
+        )
+    _print_verification(result)
+    return result
+
+
+def _print_verification(v: object) -> None:
+    from hearsay.dataset.verify import MARGINAL, NOT_TRAINABLE, TRAINABLE, Verification
+
+    assert isinstance(v, Verification)
+    table = Table(title=f"hearsay verify · {Path(v.root).name}", title_style="bold")
+    table.add_column("", no_wrap=True)
+    table.add_column("check")
+    table.add_column("detail", overflow="fold")
+    for check in v.checks:
+        mark = (
+            "[green]✓[/green]"
+            if check.ok
+            else "[red]✗[/red]"
+            if check.fatal
+            else "[yellow]![/yellow]"
+        )
+        table.add_row(mark, check.name, escape(check.detail))
+    if v.pairing_gap is not None:
+        table.add_row(
+            "·",
+            "audio/text pairing",
+            f"gap {v.pairing_gap:+.2f} — self {v.pairing_mean:.2f}, control {v.control_mean:.2f} "
+            f"over {len(v.pairing)} clips re-transcribed with {escape(v.model)}",
+        )
+    else:
+        table.add_row("·", "audio/text pairing", "not measured")
+    table.add_row(
+        "·",
+        "script",
+        "n/a"
+        if v.script_share is None
+        else f"{v.script_share:.0%} in the script of '{v.language}'",
+    )
+    table.add_row(
+        "·", "clip edges", "n/a" if v.hot_edges is None else f"{v.hot_edges:.0%} cut inside speech"
+    )
+    console.print(table)
+    style = {TRAINABLE: "green", MARGINAL: "yellow", NOT_TRAINABLE: "red"}[v.verdict]
+    body = f"[bold {style}]{v.verdict.upper()}[/bold {style}]"
+    body += "".join(f"\n• {escape(reason)}" for reason in v.reasons)
+    body += f"\n→ [bold]{v.root}/verification.md[/bold]"
+    console.print(Panel.fit(body, title="verdict", border_style=style))
+
+
 @app.command("dataset", help="Build a TTS/STT training dataset from media (clips + manifests).")
 def dataset(
     source: Annotated[
@@ -324,6 +438,14 @@ def dataset(
         str | None,
         typer.Option("--cookies-from-browser", help=_COOKIES_HELP, show_default=False),
     ] = None,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="After building, re-transcribe a sample of clips and write verification.md; "
+            "the exit code follows the verdict (0 trainable, 1 marginal, 2 not).",
+        ),
+    ] = False,
 ) -> None:
     """Build a TTS/STT dataset from SOURCE into --out."""
     _apply_runtime(device, cookies_from_browser)
@@ -420,9 +542,18 @@ def dataset(
                 ),
             )
         _print_dataset_summary(report)
+        verdict_code = 0
+        if verify:
+            from hearsay.dataset.verify import EXIT_CODES
+
+            same_model = m if m != DEFAULT_MODEL else None  # else: what the card recorded
+            result = _verify(config.out_dir, sample=8, seed=0, model=same_model, language=language)
+            verdict_code = EXIT_CODES[result.verdict]
         sources = getattr(report, "sources", None)
         if sources is not None:
             _exit_for_failures(sum(1 for s in sources if not s.ok), len(sources))
+        if verdict_code:
+            raise typer.Exit(code=verdict_code)
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130) from None

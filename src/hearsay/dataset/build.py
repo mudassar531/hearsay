@@ -287,6 +287,7 @@ def build_dataset(
         language=language,
         formats=list(config.formats),
         files=files,
+        method=transcription_method,
         clips=clips,
         dropped_count=len(drops),
         drops_by_reason=dict(Counter(d.filter for d in drops)),
