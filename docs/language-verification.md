@@ -10,6 +10,11 @@ on the produced files — none is quoted from hearsay's own build report.
 
 This sweep is what produced the five fixes in [0.7.0](../CHANGELOG.md).
 
+> **Since 0.8.0 this sweep is a command.** `hearsay verify <dataset-dir>` measures the
+> pairing gap, script authenticity, clip edges and structure described below on any
+> dataset folder and writes `verification.md` next to it. `hearsay dataset --verify`
+> runs it straight after a build. See the README's *Verify a dataset* section.
+
 ## Results
 
 | language | clips | pairing mean / median | mispaired control | script | FLEURS WER | trainable |

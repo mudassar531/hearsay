@@ -359,7 +359,7 @@ def dataset(
         str,
         typer.Argument(
             metavar="SOURCE",
-            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
+            help="YouTube video/playlist/channel URL, any yt-dlp media URL, RSS feed, or file.",
             show_default=False,
         ),
     ],
@@ -602,7 +602,7 @@ def ingest(
         str,
         typer.Argument(
             metavar="SOURCE",
-            help="YouTube video/playlist URL, podcast RSS feed, or local file.",
+            help="YouTube video/playlist/channel URL, any yt-dlp media URL, RSS feed, or file.",
             show_default=False,
         ),
     ],
